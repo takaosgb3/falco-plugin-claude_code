@@ -228,7 +228,7 @@ func TestParseJSONClaudeCodeBasic(t *testing.T) {
 
 func TestParseJSONDroppedTrueBool(t *testing.T) {
 	p := New(Config{LogFormat: "json"})
-	line := `{"received_at":"2026-04-26T12:00:00Z","session_id":"s","hook_event_name":"PreToolUse","risk_type":"x","risk_score":1,"dropped":true}`
+	line := `{"schema_version":"claude_code_security_event/v1","received_at":"2026-04-26T12:00:00Z","session_id":"s","hook_event_name":"PreToolUse","risk_type":"x","risk_score":1,"dropped":true}`
 	entry, err := p.Parse(line)
 	require.NoError(t, err)
 	assert.Equal(t, "true", entry.Dropped)
@@ -236,7 +236,7 @@ func TestParseJSONDroppedTrueBool(t *testing.T) {
 
 func TestParseJSONRiskScoreUint(t *testing.T) {
 	p := New(Config{LogFormat: "json"})
-	line := `{"received_at":"2026-04-26T12:00:00Z","session_id":"s","hook_event_name":"PreToolUse","risk_score":90}`
+	line := `{"schema_version":"claude_code_security_event/v1","received_at":"2026-04-26T12:00:00Z","session_id":"s","hook_event_name":"PreToolUse","risk_score":90}`
 	entry, err := p.Parse(line)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(90), entry.RiskScore)
@@ -244,7 +244,7 @@ func TestParseJSONRiskScoreUint(t *testing.T) {
 
 func TestParseJSONNegativeNumberClippedToZero(t *testing.T) {
 	p := New(Config{LogFormat: "json"})
-	line := `{"received_at":"2026-04-26T12:00:00Z","latency_ms":-5}`
+	line := `{"schema_version":"claude_code_security_event/v1","received_at":"2026-04-26T12:00:00Z","session_id":"s","hook_event_name":"PreToolUse","latency_ms":-5}`
 	entry, err := p.Parse(line)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), entry.LatencyMs, "negative numbers must be clipped to 0 (§10.2 type-conversion guidance)")
@@ -255,7 +255,7 @@ func TestParseJSONNegativeNumberClippedToZero(t *testing.T) {
 func TestParseAutoJSON(t *testing.T) {
 	p := New(Config{LogFormat: "auto"})
 
-	line := `{"received_at":"2026-02-27T10:00:00Z","session_id":"s","hook_event_name":"PreToolUse"}`
+	line := `{"schema_version":"claude_code_security_event/v1","received_at":"2026-02-27T10:00:00Z","session_id":"s","hook_event_name":"PreToolUse"}`
 	entry, err := p.Parse(line)
 
 	require.NoError(t, err)
@@ -265,7 +265,7 @@ func TestParseAutoJSON(t *testing.T) {
 func TestParseAutoWhitespaceJSON(t *testing.T) {
 	p := New(Config{LogFormat: "auto"})
 
-	line := `  {"received_at":"2026-02-27T10:00:00Z"}`
+	line := `  {"schema_version":"claude_code_security_event/v1","received_at":"2026-02-27T10:00:00Z","session_id":"s","hook_event_name":"PreToolUse"}`
 	entry, err := p.Parse(line)
 
 	require.NoError(t, err)

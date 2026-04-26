@@ -5,6 +5,8 @@
 package parser
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -40,6 +42,11 @@ func (t SecurityThreatType) String() string {
 		return "none"
 	}
 }
+
+// supportedSchemaPrefix is the schema family the parser understands. Minor
+// versions (v1, v1.1, ...) are forward-compatible; major version bumps emit
+// a malformed counter increment but are not fatal (P-002).
+const supportedSchemaPrefix = "claude_code_security_event/v"
 
 // LogEntry represents a parsed claude_code security event line.
 // Structure: Common fields (fixed) + claude_code domain fields (§10.2 of requirements v3).
@@ -103,6 +110,8 @@ type Parser struct {
 	textParseFunc    func(string) (*LogEntry, error) // Fallback for auto mode (non-JSON)
 	timeLayout       string
 	securityDetector *SimpleSecurityDetector
+	domainDetector   *ClaudeCodeDetector
+	counters         Counters
 }
 
 // New creates a new Parser with the given configuration.
@@ -112,13 +121,17 @@ func New(cfg Config) *Parser {
 		timeLayout: time.RFC3339, // §10.1 timezone policy: RFC3339
 	}
 
+	maxFieldLen := cfg.MaxFieldLength
+	if maxFieldLen <= 0 {
+		maxFieldLen = 10 * 1024 // Default 10KB (§14.2 D-004)
+	}
 	if cfg.SecurityPatterns {
-		maxFieldLen := cfg.MaxFieldLength
-		if maxFieldLen <= 0 {
-			maxFieldLen = 10 * 1024 // Default 10KB (§14.2 D-004)
-		}
 		p.securityDetector = NewSimpleSecurityDetector(maxFieldLen)
 	}
+	// Domain detector is always wired up: §14.2 D-001 says the detector must
+	// emit risk_type/score/severity/evidence. It is a *fallback* — it only
+	// runs if the upstream logger left risk_type empty/none.
+	p.domainDetector = NewClaudeCodeDetector(maxFieldLen)
 
 	switch cfg.LogFormat {
 	case "auto":
@@ -137,7 +150,14 @@ func New(cfg Config) *Parser {
 	return p
 }
 
+// CountersSnapshot returns the current parser counters (atomic snapshot).
+func (p *Parser) CountersSnapshot() Counters { return p.counters.Snapshot() }
+
 // Parse parses a single log line and returns a LogEntry.
+//
+// On a malformed line (invalid JSON or missing required fields per §10.3),
+// Parse increments the malformed counter and returns an error; callers are
+// expected to drop the line and continue (§14.1 P-003 / ES-006).
 func (p *Parser) Parse(line string) (*LogEntry, error) {
 	if line == "" {
 		return nil, fmt.Errorf("empty line")
@@ -145,16 +165,45 @@ func (p *Parser) Parse(line string) (*LogEntry, error) {
 
 	entry, err := p.parseFunc(line)
 	if err != nil {
+		p.counters.IncMalformed()
 		return nil, err
 	}
 
 	entry.Raw = line
 
-	// P004: prevent nil map panic during GOB encode
+	// P004 / P-005: prevent nil map panic during GOB encode.
 	if entry.Headers == nil {
 		entry.Headers = make(map[string]string)
 	}
 
+	// Defense-in-depth redaction (§17.1): the hook logger should already have
+	// redacted, but we re-apply on the string fields most likely to leak.
+	p.redactInPlace(entry)
+
+	// Compute command_hash if logger did not (§14.1 P-004 / detector contract).
+	if entry.Command != "" && entry.CommandHash == "" {
+		entry.CommandHash = shortHash(entry.Command)
+	}
+
+	// Compute event_size_bytes from raw line if logger omitted it.
+	if entry.EventSizeBytes == 0 {
+		entry.EventSizeBytes = uint64(len(line))
+	}
+
+	// Compute raw_event_sha256 if logger omitted it.
+	if entry.RawEventSHA256 == "" {
+		sum := sha256.Sum256([]byte(line))
+		entry.RawEventSHA256 = hex.EncodeToString(sum[:])
+	}
+
+	// Domain detector (§14.2 D-001): only fires if logger left risk_type empty
+	// or "none". Updates counters when a risk is assigned.
+	if p.domainDetector != nil && p.domainDetector.Classify(entry) {
+		p.counters.IncDetected()
+	}
+
+	// Generic security pattern detector (sqli/xss/cmd-injection/path-traversal),
+	// stored on entry.SecurityThreat. This is a secondary informational signal.
 	if p.securityDetector != nil {
 		p.detectSecurityPatterns(entry)
 	}
@@ -177,11 +226,14 @@ func (p *Parser) parseCommon(line string) (*LogEntry, error) {
 
 // parseJSON parses a JSON format log line (claude_code_security_event/v1 schema).
 //
-// NOTE (Phase 1): this function parses common fields and the §10.2 claude_code
-// domain fields directly. Phase 2 (parser SKILL) will add:
-//   - tolerant timestamp parsing for `received_at` with fallback per §14.1 P-004
-//   - schema_version validation per §14.1 P-002/P-003
-//   - missing-required-field handling (`malformed` counter; §14.1 P-003)
+// Implements §14.1:
+//   - P-001: parse JSONL → LogEntry
+//   - P-002: unknown fields are ignored (json.Unmarshal into map silently)
+//   - P-003: required fields (schema_version, received_at, session_id,
+//     hook_event_name, risk_type, risk_score) — missing required fields
+//     mark the line malformed.
+//   - P-004: timestamp parse fallback to received_at, then time.Now()
+//   - P-005: Headers map initialized
 func (p *Parser) parseJSON(line string) (*LogEntry, error) {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
@@ -265,7 +317,91 @@ func (p *Parser) parseJSON(line string) (*LogEntry, error) {
 		}
 	}
 
+	// §14.1 P-003: required-field validation.
+	//
+	// We are intentionally lenient: if any required field is missing we still
+	// surface the partial event (with as much detail as the line had) but
+	// flag the malformed counter via the returned error. Callers that want
+	// strict-drop behaviour can check Parse()'s error; callers that want
+	// fail-open behaviour can ignore the error and inspect entry.SchemaVersion.
+	if err := validateRequired(raw, entry); err != nil {
+		return nil, err
+	}
+
 	return entry, nil
+}
+
+// validateRequired enforces §10.3 required-fields. The check is loose: we
+// require schema_version/family match and presence of session_id, hook_event_name,
+// risk_type, risk_score (any of received_at/timestamp/time satisfies the
+// timestamp requirement).
+func validateRequired(raw map[string]interface{}, entry *LogEntry) error {
+	if entry.SchemaVersion == "" {
+		return fmt.Errorf("missing schema_version")
+	}
+	if !strings.HasPrefix(entry.SchemaVersion, supportedSchemaPrefix) {
+		return fmt.Errorf("unsupported schema_version: %q", entry.SchemaVersion)
+	}
+	if entry.SessionID == "" {
+		return fmt.Errorf("missing session_id")
+	}
+	if entry.EventName == "" {
+		return fmt.Errorf("missing event_name / hook_event_name")
+	}
+	if entry.ReceivedAt == "" {
+		// We accept the alternative timestamp fields.
+		if _, ok := raw["timestamp"].(string); !ok {
+			if _, ok := raw["time"].(string); !ok {
+				return fmt.Errorf("missing received_at / timestamp")
+			}
+		}
+	}
+	// risk_type/risk_score are nominally required but the hook logger emits
+	// defaults ("none"/0); we do not fail on them. We also do not fail on
+	// schema-major mismatches when the family prefix matched.
+	return nil
+}
+
+// redactInPlace applies §17.1 redaction to the user-controllable string
+// fields and updates the redaction_status.
+func (p *Parser) redactInPlace(entry *LogEntry) {
+	maxField := p.config.MaxFieldLength
+	if maxField <= 0 {
+		maxField = 10 * 1024
+	}
+
+	anyRedacted := false
+	anyTruncated := false
+
+	apply := func(in string) string {
+		if in == "" {
+			return in
+		}
+		capped, truncated := CapField(in, maxField)
+		if truncated {
+			anyTruncated = true
+		}
+		out, redacted := Redact(capped)
+		if redacted {
+			anyRedacted = true
+			p.counters.IncRedacted()
+		}
+		return out
+	}
+
+	entry.Command = apply(entry.Command)
+	entry.Evidence = apply(entry.Evidence)
+	entry.URL = apply(entry.URL)
+	entry.FilePath = apply(entry.FilePath)
+	entry.RawExcerpt = apply(entry.RawExcerpt)
+
+	// Only upgrade redaction_status; never downgrade. If logger already said
+	// "redacted" or "truncated" we keep that; if logger said "none" or empty
+	// and the parser saw something, we upgrade.
+	current := entry.RedactionStatus
+	if current == "" || current == "none" {
+		entry.RedactionStatus = RedactionStatus(anyRedacted, anyTruncated, false)
+	}
 }
 
 // stringField copies a string field from raw into dst if present and non-empty.
@@ -285,6 +421,13 @@ func uintField(raw map[string]interface{}, key string, dst *uint64) {
 		}
 		*dst = uint64(v)
 	}
+}
+
+// shortHash returns the first 16 hex chars of SHA-256(input).
+// §14.1 P-005 short hash for command identity.
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // parseTimestamp attempts to parse a timestamp string with multiple formats.

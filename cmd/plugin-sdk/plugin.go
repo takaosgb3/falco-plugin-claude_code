@@ -10,6 +10,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/jsonschema"
@@ -45,6 +48,15 @@ func debugLog(format string, args ...interface{}) {
 type ClaudeCodeConfig struct {
 	LogPaths        []string `json:"log_paths"`
 	EventBufferSize int      `json:"event_buffer_size"`
+	// PollIntervalMs sets the polling-fallback interval in milliseconds. The
+	// plugin uses fsnotify as the primary mechanism; the poller catches up
+	// missed events on platforms where fsnotify is flaky (macOS Spotlight,
+	// remote filesystems, …). 0 disables polling. Default: 250ms.
+	PollIntervalMs int `json:"poll_interval_ms"`
+	// StartAt controls the initial seek behaviour. "end" (default) seeks to
+	// the file tail (P014). "beginning" seeks to byte 0 — used by replay /
+	// fixture tests (§14.1 P-007 / ES-004).
+	StartAt string `json:"start_at"`
 }
 
 // --- Plugin Event ---
@@ -109,17 +121,44 @@ type ClaudeCodePlugin struct {
 // --- Instance Struct ---
 type ClaudeCodeInstance struct {
 	source.BaseInstance
-	eventCh       chan *ClaudeCodeEvent
-	watcher       *fsnotify.Watcher
-	files         map[string]*TailFile // Open file handle management (released in Close())
-	droppedEvents uint64               // Event drop tracking (atomic)
+	eventCh chan *ClaudeCodeEvent
+	watcher *fsnotify.Watcher
+	files   map[string]*TailFile // Open file handle management (released in Close())
+	mu      sync.Mutex           // P015: protects files map AND eventCh-close ordering
+
+	// Lifecycle: ctx is cancelled in Close() so all background goroutines
+	// (readLoop, pollLoop) drain and exit (P011 goroutine leak prevention).
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closed    atomic.Bool // P006: gate for sends to eventCh
+
+	// Counters / observability (§6.3 FP-011)
+	droppedEvents  uint64
+	rotationEvents uint64
+	reopenEvents   uint64
+
+	// Configuration snapshot
+	pollInterval time.Duration
 }
 
-// TailFile: File tail-following struct
+// TailFile: File tail-following struct.
+// reader buffers reads with a large MaxScanTokenSize (P012 large-line safety).
+// readMu serializes concurrent reads from readLoop (fsnotify) and pollLoop
+// (polling fallback). Both can fire simultaneously on the same file; bufio
+// is not goroutine-safe.
+//
+// `offset` is the last known read position (used by pollAll for truncate
+// detection). It is read by pollAll without holding readMu, so we use
+// atomic.Int64.
 type TailFile struct {
 	file   *os.File
 	path   string
 	reader *bufio.Reader
+	readMu sync.Mutex
+	inode  uint64       // detected via stat; HL-011 / rotation reopen
+	offset atomic.Int64 // last known offset for polling fallback
 }
 
 // --- Plugin Factory Registration ---
@@ -195,15 +234,28 @@ func (p *ClaudeCodePlugin) Open(params string) (source.Instance, error) {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
 	}
 
-	instance := &ClaudeCodeInstance{
-		eventCh: make(chan *ClaudeCodeEvent, p.config.EventBufferSize),
-		watcher: watcher,
-		files:   make(map[string]*TailFile),
+	pollInterval := time.Duration(p.config.PollIntervalMs) * time.Millisecond
+	if p.config.PollIntervalMs == 0 {
+		pollInterval = 250 * time.Millisecond // §8.3 default poll fallback
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	instance := &ClaudeCodeInstance{
+		eventCh:      make(chan *ClaudeCodeEvent, p.config.EventBufferSize),
+		watcher:      watcher,
+		files:        make(map[string]*TailFile),
+		ctx:          ctx,
+		cancel:       cancel,
+		pollInterval: pollInterval,
+	}
+
+	startAtBeginning := p.config.StartAt == "beginning" // §14.1 P-007 replay mode
+
 	for _, logPath := range p.config.LogPaths {
-		// Path traversal prevention (E6 security requirement)
+		// Path traversal prevention (E6 / HL-011)
 		if strings.Contains(logPath, "..") {
+			cancel()
+			watcher.Close()
 			return nil, fmt.Errorf("path traversal not allowed: %s", logPath)
 		}
 
@@ -211,6 +263,8 @@ func (p *ClaudeCodePlugin) Open(params string) (source.Instance, error) {
 		if strings.HasPrefix(logPath, "~/") {
 			home, err := os.UserHomeDir()
 			if err != nil {
+				cancel()
+				watcher.Close()
 				return nil, fmt.Errorf("failed to expand ~/ in path %s: %w", logPath, err)
 			}
 			logPath = filepath.Join(home, logPath[2:])
@@ -222,49 +276,120 @@ func (p *ClaudeCodePlugin) Open(params string) (source.Instance, error) {
 			debugLog("Warning: failed to create directory %s: %v", dir, err)
 		}
 
-		f, err := os.OpenFile(logPath, os.O_RDONLY|os.O_CREATE, 0600) // §27.1: file mode 0600
+		tf, err := openTailFile(logPath, startAtBeginning)
 		if err != nil {
 			debugLog("Warning: failed to open %s: %v", logPath, err)
 			continue
 		}
+		instance.files[logPath] = tf
 
-		// P014: Seek to end so we don't reprocess existing logs on startup.
-		// claude_code's events.jsonl accumulates across sessions, so SeekEnd is critical.
-		if _, err := f.Seek(0, io.SeekEnd); err != nil {
-			debugLog("Warning: failed to seek %s: %v", logPath, err)
-		}
-
-		reader := bufio.NewReader(f)
-		instance.files[logPath] = &TailFile{
-			file:   f,
-			path:   logPath,
-			reader: reader,
-		}
-
+		// Watch the parent dir so rename / create / remove events are
+		// observed even when the file replaces in place (rotation).
 		if err := watcher.Add(dir); err != nil {
 			debugLog("Warning: failed to watch %s: %v", dir, err)
 		}
 
-		debugLog("Watching: %s", logPath)
+		debugLog("Watching: %s (inode=%d, start_at=%s)", logPath, tf.inode,
+			map[bool]string{true: "beginning", false: "end"}[startAtBeginning])
 	}
 
-	// Start background file reader
-	go instance.readLoop(p.parser)
+	// Start background goroutines.
+	instance.wg.Add(1)
+	go func() {
+		defer instance.wg.Done()
+		instance.readLoop(p.parser)
+	}()
+
+	if pollInterval > 0 {
+		instance.wg.Add(1)
+		go func() {
+			defer instance.wg.Done()
+			instance.pollLoop(p.parser)
+		}()
+	}
 
 	return instance, nil
 }
 
-// readLoop: Background goroutine for reading new log lines
+// openTailFile opens a single log file and seeks per `startAtBeginning`.
+// HL-011: we lstat after open and compare st_dev/st_ino to detect symlink
+// races (a symlink that swaps to a different target between open and use).
+func openTailFile(path string, startAtBeginning bool) (*TailFile, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0600) // §27.1: file mode 0600
+	if err != nil {
+		return nil, err
+	}
+
+	if !startAtBeginning {
+		// P014: Seek to end so we don't reprocess existing logs on startup.
+		// claude_code's events.jsonl accumulates across sessions, so SeekEnd
+		// is critical (also ES-004 default).
+		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+
+	inode := statInode(f)
+	off, _ := f.Seek(0, io.SeekCurrent)
+
+	// P012: bufio.Reader has no MaxScanTokenSize but we use ReadString('\n')
+	// which grows internally up to the buffer cap. Use a 1 MiB buffer to
+	// accommodate logger payloads up to maxRawBytes (64KB) plus framing.
+	const tailBufSize = 1 << 20
+	reader := bufio.NewReaderSize(f, tailBufSize)
+	tf := &TailFile{file: f, path: path, reader: reader, inode: inode}
+	tf.offset.Store(off)
+	return tf, nil
+}
+
+// statInode returns the file's inode (or 0 on platforms where it's not
+// available). Used for rotation detection.
+func statInode(f *os.File) uint64 {
+	if f == nil {
+		return 0
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+		return uint64(sys.Ino) // #nosec G115 — inode fits in uint64 on darwin/linux
+	}
+	return 0
+}
+
+// statPathInode stats `path` directly (does not require an open fd).
+func statPathInode(path string) (uint64, error) {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return 0, err
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+		return uint64(sys.Ino), nil
+	}
+	return 0, nil
+}
+
+// readLoop: Background goroutine for reading new log lines via fsnotify
+// events. Cancels cleanly when ctx is Done (P011 goroutine leak prevention).
 func (inst *ClaudeCodeInstance) readLoop(p *parser.Parser) {
+	// On startup, drain anything that was already in the file when we opened
+	// it (only meaningful when StartAt=beginning; for SeekEnd this is a
+	// no-op).
+	for path := range inst.files {
+		inst.readNewLines(path, p)
+	}
+
 	for {
 		select {
+		case <-inst.ctx.Done():
+			return
 		case event, ok := <-inst.watcher.Events:
 			if !ok {
 				return
 			}
-			if event.Has(fsnotify.Write) {
-				inst.readNewLines(event.Name, p)
-			}
+			inst.handleFsEvent(event, p)
 		case err, ok := <-inst.watcher.Errors:
 			if !ok {
 				return
@@ -274,39 +399,227 @@ func (inst *ClaudeCodeInstance) readLoop(p *parser.Parser) {
 	}
 }
 
-// readNewLines: Read and parse new lines from the log file
-func (inst *ClaudeCodeInstance) readNewLines(path string, p *parser.Parser) {
-	tf, ok := inst.files[path]
+// handleFsEvent dispatches a single fsnotify event.
+//
+// fsnotify emits events for the parent directory, so we have to filter to
+// the path we're tailing. Rename/Remove on the watched path → rotation
+// reopen (§20.2.1 5-step rename rotation).
+func (inst *ClaudeCodeInstance) handleFsEvent(ev fsnotify.Event, p *parser.Parser) {
+	tf := inst.lookupFileByPath(ev.Name)
+	// The event is on a sibling path we don't care about. But if a Create
+	// event landed for one of our watched paths (e.g. rotation post-step:
+	// a fresh inode at the same path), reopen it.
+	if tf == nil {
+		// Maybe Create on a path we're watching but don't currently have
+		// an open fd for (e.g. file was deleted, now recreated).
+		if ev.Has(fsnotify.Create) {
+			if exists := inst.fileForExpectedPath(ev.Name); exists {
+				inst.reopen(ev.Name, p)
+			}
+		}
+		return
+	}
+
+	switch {
+	case ev.Has(fsnotify.Write):
+		inst.readNewLines(ev.Name, p)
+	case ev.Has(fsnotify.Rename) || ev.Has(fsnotify.Remove):
+		// §20.2.1 step 1: rotation detected.
+		atomic.AddUint64(&inst.rotationEvents, 1)
+		debugLog("Rotation detected on %s (op=%s); reopening", ev.Name, ev.Op)
+		inst.reopen(ev.Name, p)
+	case ev.Has(fsnotify.Create):
+		// File reappeared at the same path. Treat as part of rotation.
+		inst.reopen(ev.Name, p)
+	}
+}
+
+// fileForExpectedPath reports whether `path` is in the configured log paths
+// list (i.e. we *expect* to tail it once it exists).
+func (inst *ClaudeCodeInstance) fileForExpectedPath(path string) bool {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	_, ok := inst.files[path]
+	return ok
+}
+
+// lookupFileByPath returns the TailFile for `path` if currently open.
+func (inst *ClaudeCodeInstance) lookupFileByPath(path string) *TailFile {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.files[path]
+}
+
+// reopen handles §20.2.1 rotation steps 2..5:
+//
+//	2) close the existing handle
+//	3) open the new handle (O_RDONLY)
+//	4) Seek(0, io.SeekStart) — rotated file is fresh, read from byte 0
+//	5) record the new inode (HL-011 symlink race detection)
+//
+// We only reopen if the new inode differs from the old one OR the old fd's
+// stat now reports st_size < last_offset (truncate rotation).
+func (inst *ClaudeCodeInstance) reopen(path string, p *parser.Parser) {
+	inst.mu.Lock()
+	old, ok := inst.files[path]
+	inst.mu.Unlock()
 	if !ok {
 		return
 	}
 
+	newInode, statErr := statPathInode(path)
+	// During rename rotation the new file may not exist for a brief moment;
+	// fall through to attempt the open and handle ENOENT inside openTailFile.
+	if statErr == nil && newInode != 0 && newInode == old.inode {
+		// Same inode: this is a truncate rotation OR a spurious event. If
+		// truncate: file size dropped below our last offset → we need to
+		// reset and read from byte 0.
+		if st, err := old.file.Stat(); err == nil && st.Size() < old.offset.Load() {
+			debugLog("Truncate detected on %s (size=%d offset=%d); resetting",
+				path, st.Size(), old.offset.Load())
+		} else {
+			// Same inode, no truncate → nothing to do.
+			return
+		}
+	}
+
+	// Close old handle (step 2).
+	old.file.Close()
+
+	// Open new handle and seek to start (steps 3..5).
+	tf, err := openTailFile(path, true /* startAtBeginning: rotated file */)
+	if err != nil {
+		debugLog("reopen failed for %s: %v", path, err)
+		// Remove stale entry so we don't keep referencing a closed fd.
+		inst.mu.Lock()
+		delete(inst.files, path)
+		inst.mu.Unlock()
+		return
+	}
+	atomic.AddUint64(&inst.reopenEvents, 1)
+
+	inst.mu.Lock()
+	inst.files[path] = tf
+	inst.mu.Unlock()
+
+	// Drain the rotated file immediately.
+	inst.readNewLines(path, p)
+}
+
+// pollLoop runs alongside fsnotify and catches up missed writes / rotations.
+// fsnotify on macOS Spotlight-indexed directories occasionally drops events;
+// the poller is the safety net (§14.1, §8.3).
+func (inst *ClaudeCodeInstance) pollLoop(p *parser.Parser) {
+	t := time.NewTicker(inst.pollInterval)
+	defer t.Stop()
 	for {
+		select {
+		case <-inst.ctx.Done():
+			return
+		case <-t.C:
+			inst.pollAll(p)
+		}
+	}
+}
+
+// pollAll iterates open files and (a) reads any new bytes, (b) detects
+// rotation by inode change, (c) detects truncate-in-place rotation by
+// observing file size shrinking below the last known offset.
+func (inst *ClaudeCodeInstance) pollAll(p *parser.Parser) {
+	inst.mu.Lock()
+	paths := make([]string, 0, len(inst.files))
+	for path := range inst.files {
+		paths = append(paths, path)
+	}
+	inst.mu.Unlock()
+
+	for _, path := range paths {
+		// Cheap inode check: rename rotation while we slept.
+		newInode, err := statPathInode(path)
+		if err == nil && newInode != 0 {
+			inst.mu.Lock()
+			tf, ok := inst.files[path]
+			inst.mu.Unlock()
+			if ok && tf.inode != 0 && newInode != tf.inode {
+				atomic.AddUint64(&inst.rotationEvents, 1)
+				inst.reopen(path, p)
+				continue
+			}
+			// Truncate-in-place check: same inode, but on-disk size is
+			// smaller than where we last read to.
+			if ok {
+				if st, statErr := os.Stat(path); statErr == nil && st.Size() < tf.offset.Load() {
+					atomic.AddUint64(&inst.rotationEvents, 1)
+					inst.reopen(path, p)
+					continue
+				}
+			}
+		}
+		inst.readNewLines(path, p)
+	}
+}
+
+// readNewLines: Read and parse new lines from the log file. Safe to call
+// concurrently from readLoop and pollLoop — concurrent calls on the same
+// TailFile are serialized via TailFile.readMu (bufio is not goroutine-safe).
+func (inst *ClaudeCodeInstance) readNewLines(path string, p *parser.Parser) {
+	inst.mu.Lock()
+	tf, ok := inst.files[path]
+	inst.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	tf.readMu.Lock()
+	defer tf.readMu.Unlock()
+
+	for {
+		// P006: do not send to a closed channel.
+		if inst.closed.Load() {
+			return
+		}
+
 		line, err := tf.reader.ReadString('\n')
+		if len(line) > 0 {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				event := parseLine(line, path, p)
+				if event != nil {
+					inst.deliver(event)
+				}
+			}
+		}
 		if err != nil {
 			break
 		}
+	}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	// Refresh offset for poll-based truncate detection.
+	if off, err := tf.file.Seek(0, io.SeekCurrent); err == nil {
+		tf.offset.Store(off)
+	}
+}
+
+// deliver sends an event to the buffered channel with non-blocking semantics
+// and drop counter. P006: use atomic flag to gate sends after Close().
+func (inst *ClaudeCodeInstance) deliver(event *ClaudeCodeEvent) {
+	if inst.closed.Load() {
+		return
+	}
+	defer func() {
+		// P006 fallback: if the channel was closed between our atomic check
+		// and the send, recover from the panic and increment dropped.
+		if r := recover(); r != nil {
+			atomic.AddUint64(&inst.droppedEvents, 1)
 		}
-
-		event := parseLine(line, path, p)
-		if event == nil {
-			continue
-		}
-
-		// Non-blocking channel send (channel overflow handling)
-		select {
-		case inst.eventCh <- event:
-			// Successfully sent
-		default:
-			// Channel full - drop event and track (FP-012 backpressure)
-			dropped := atomic.AddUint64(&inst.droppedEvents, 1)
-			if dropped%100 == 0 {
-				log.Printf("[claude-code] WARNING: %d events dropped (channel full)", dropped)
-			}
+	}()
+	select {
+	case inst.eventCh <- event:
+	default:
+		// Channel full - drop event and track (FP-012 backpressure)
+		dropped := atomic.AddUint64(&inst.droppedEvents, 1)
+		if dropped%100 == 0 {
+			log.Printf("[claude-code] WARNING: %d events dropped (channel full)", dropped)
 		}
 	}
 }
@@ -564,20 +877,43 @@ func (inst *ClaudeCodeInstance) NextBatch(pState sdk.PluginState, evts sdk.Event
 }
 
 // --- Close() - Resource Cleanup ---
-// FP-010: watcher, fd, goroutine, channel must be released
+// FP-010: watcher, fd, goroutine, channel must be released.
+// P006/P011/P015: ordered shutdown to avoid send-on-closed-channel panics
+// and goroutine leaks:
+//
+//  1. cancel ctx → readLoop / pollLoop start to exit
+//  2. close fsnotify watcher (Events/Errors channels close as a side effect)
+//  3. set closed=true atomic flag (gate for any in-flight deliver())
+//  4. wg.Wait() for both goroutines to actually return
+//  5. close fds
+//  6. close eventCh (no more producers exist at this point)
 func (inst *ClaudeCodeInstance) Close() {
-	if inst.watcher != nil {
-		inst.watcher.Close()
-	}
-	for _, f := range inst.files {
-		if f.file != nil {
-			f.file.Close()
+	inst.closeOnce.Do(func() {
+		if inst.cancel != nil {
+			inst.cancel()
 		}
-	}
-	close(inst.eventCh)
+		if inst.watcher != nil {
+			inst.watcher.Close()
+		}
+		inst.closed.Store(true)
+		inst.wg.Wait()
 
-	debugLog("Instance closed. Dropped events: %d",
-		atomic.LoadUint64(&inst.droppedEvents))
+		inst.mu.Lock()
+		for _, f := range inst.files {
+			if f.file != nil {
+				f.file.Close()
+			}
+		}
+		inst.files = nil
+		inst.mu.Unlock()
+
+		close(inst.eventCh)
+
+		debugLog("Instance closed. Dropped=%d Rotations=%d Reopens=%d",
+			atomic.LoadUint64(&inst.droppedEvents),
+			atomic.LoadUint64(&inst.rotationEvents),
+			atomic.LoadUint64(&inst.reopenEvents))
+	})
 }
 
 // main() is required but empty for -buildmode=c-shared
