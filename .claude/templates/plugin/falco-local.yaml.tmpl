@@ -1,0 +1,23 @@
+# Local Falco configuration for ${PLUGIN_NAME} plugin (macOS)
+# Requires: Falco 0.43.0+ built with MINIMAL_BUILD=ON
+# P017: macOS Falco rejects outputs: section - excluded from this file
+# P018: Run with -U flag: falco -c falco-local.yaml --disable-source syscall -U
+
+plugins:
+  - name: ${PLUGIN_NAME}
+    library_path: ./lib${PLUGIN_NAME}-plugin-darwin-arm64.dylib
+    init_config: |
+      {"log_paths": ["${LOG_PATH_DEFAULT}"]}
+
+# P008: This directive is REQUIRED
+load_plugins: [${PLUGIN_NAME}]
+
+# P007: Use individual file paths
+rules_files:
+  - ./rules/${PLUGIN_NAME}_rules.yaml
+
+stdout_output:
+  enabled: true
+
+# P009: No rate limiting (macOS cannot use outputs: section due to P017)
+# Set rate/max_burst at Falco CLI level if needed: --option outputs.rate=0

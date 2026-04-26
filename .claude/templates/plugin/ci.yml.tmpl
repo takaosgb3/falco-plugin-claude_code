@@ -1,0 +1,54 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run Tests
+        run: go test ./... -v -race
+
+      - name: Run Vet
+        run: go vet ./...
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1
+
+      - name: Run Lint
+        run: golangci-lint run
+
+      - name: Validate Rules YAML
+        run: python3 -c "import yaml; yaml.safe_load(open('rules/${PLUGIN_NAME}_rules.yaml'))"
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Plugin
+        run: make build
+
+      - name: Verify Binary
+        run: make verify
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-binary
+          path: lib*-plugin-linux-amd64.so

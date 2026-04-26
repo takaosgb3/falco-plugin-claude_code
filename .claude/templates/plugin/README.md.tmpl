@@ -1,0 +1,151 @@
+# Falco ${PLUGIN_NAME} Plugin
+
+A Falco plugin for monitoring ${PLUGIN_NAME} access logs and detecting security threats in real-time.
+
+## Features
+
+- Real-time log monitoring via file watching
+- Security threat detection:
+  - SQL Injection
+  - Cross-Site Scripting (XSS)
+  - Path Traversal / Local File Inclusion
+  - Command Injection
+  - Suspicious User-Agent Detection
+- URL decoding support (up to 3 levels)
+- Customizable Falco rules
+
+## Requirements
+
+- Falco 0.36.0+
+- Go 1.22+ (for building from source)
+- Linux (for running the plugin)
+
+## Quick Start
+
+### Installation
+
+```bash
+# Download the plugin binary
+wget https://github.com/${AUTHOR}/${PLUGIN_NAME}/releases/latest/download/lib${PLUGIN_NAME}-plugin-linux-amd64.so
+
+# Copy to Falco plugins directory
+sudo cp lib${PLUGIN_NAME}-plugin-linux-amd64.so /usr/share/falco/plugins/lib${PLUGIN_NAME}-plugin.so
+
+# Copy rules
+sudo cp rules/${PLUGIN_NAME}_rules.yaml /etc/falco/rules.d/
+```
+
+### Configuration
+
+Add to your `falco.yaml`:
+
+```yaml
+plugins:
+  - name: ${PLUGIN_NAME}
+    library_path: /usr/share/falco/plugins/lib${PLUGIN_NAME}-plugin.so
+    init_config: |
+      {"log_paths": ["${LOG_PATH_DEFAULT}"]}
+
+load_plugins: [${PLUGIN_NAME}]
+
+rules_files:
+  - /etc/falco/rules.d/${PLUGIN_NAME}_rules.yaml
+
+stdout_output:
+  enabled: true
+  rate: 0
+  max_burst: 0
+```
+
+### Running
+
+```bash
+# Run Falco with the plugin (plugin-only mode)
+sudo falco -c /etc/falco/falco.yaml --disable-source syscall
+```
+
+## Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/${AUTHOR}/${PLUGIN_NAME}.git
+cd ${PLUGIN_NAME}
+
+# Build (auto-detects OS: .dylib on macOS, .so on Linux)
+make build
+
+# Run tests
+make test
+
+# Verify the binary
+make verify
+```
+
+### Build Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Standard build — produces `.dylib` on macOS, `.so` on Linux |
+| `make build-release` | Size-optimized release build (strips debug symbols) |
+| `make verify` | Verify the built binary exports required symbols |
+
+## Testing
+
+### 3-Layer E2E Test Architecture
+
+| Level | Target | Command | Requirement |
+|-------|--------|---------|-------------|
+| Level 1 | Pattern Coverage | `make e2e-pattern` | No Falco required |
+| Level 2 | Pipeline | `make e2e-pipeline` | No Falco required |
+| Level 3 | Falco Integration | `make e2e-ci` | Requires Falco |
+
+### Quick Test
+
+```bash
+make test      # Unit tests
+make e2e       # Level 1 + Level 2
+```
+
+## Falco Configuration
+
+| Environment | Config File | Binary |
+|-------------|------------|--------|
+| Linux (Production) | `falco.yaml` | `.so` |
+| macOS (Development) | `falco-local.yaml` | `.dylib` |
+| Docker | `falco-docker.yaml` | `.so` |
+
+## Security Rules
+
+| Rule | Description | Priority |
+|------|-------------|----------|
+| SQL Injection | Detects SQL injection attempts | WARNING |
+| XSS | Detects Cross-Site Scripting attempts | WARNING |
+| Path Traversal | Detects path traversal / LFI attempts | WARNING |
+| Command Injection | Detects command injection attempts | WARNING |
+| Suspicious User-Agent | Detects known scanning tools | NOTICE |
+
+## Plugin Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `${EVENT_SOURCE}.client_ip` | string | Client IP address |
+| `${EVENT_SOURCE}.method` | string | HTTP method |
+| `${EVENT_SOURCE}.path` | string | Request path |
+| `${EVENT_SOURCE}.query_string` | string | Query string |
+| `${EVENT_SOURCE}.request_uri` | string | Full request URI |
+| `${EVENT_SOURCE}.status` | uint64 | HTTP status code |
+| `${EVENT_SOURCE}.user_agent` | string | User-Agent header |
+| `${EVENT_SOURCE}.bytes_sent` | uint64 | Response body size |
+| `${EVENT_SOURCE}.headers[key]` | string | Request headers |
+
+## Debug Mode
+
+Enable debug logging:
+
+```bash
+export FALCO_${PLUGIN_NAME_UPPER}_DEBUG=true
+```
+
+## License
+
+${LICENSE}

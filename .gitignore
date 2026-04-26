@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build artifacts (生成プラグインディレクトリ用)
+*.so
+*.dylib
+*.dll
+*.h
+build/
+dist/
+
+# Go
+vendor/
+*.test
+*.out
+coverage.txt
+
+# Claude Code workspace
+.claude/skills/plugin-debug-workspace/

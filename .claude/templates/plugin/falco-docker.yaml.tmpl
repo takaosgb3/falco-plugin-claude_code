@@ -1,0 +1,29 @@
+# Falco configuration for ${PLUGIN_NAME} plugin (Docker)
+# P008: load_plugins is REQUIRED
+# P009: rate: 0 and max_burst: 0 to prevent alert suppression
+
+plugins:
+  - name: ${PLUGIN_NAME}
+    library_path: /usr/share/falco/plugins/lib${PLUGIN_NAME}-plugin.so
+    init_config: |
+      {
+        "log_paths": ["${LOG_PATH_DEFAULT}"],
+        "event_buffer_size": 1000
+      }
+
+# P008: This directive is REQUIRED
+load_plugins: [${PLUGIN_NAME}]
+
+# P007: Use individual file paths
+rules_files:
+  - /etc/falco/rules.d/${PLUGIN_NAME}_rules.yaml
+
+stdout_output:
+  enabled: true
+
+json_output: true
+
+# P009: No rate limiting
+outputs:
+  rate: 0
+  max_burst: 0

@@ -1,0 +1,340 @@
+{
+  "_comment": "This template contains all pattern categories in a single file. The scaffold skill MUST split each category into an individual JSON file under test/e2e/patterns/categories/ (e.g., sqli.json, xss.json). Each output file should contain only the category object: {category, patterns}, NOT the top-level {categories} wrapper. The e2e_pattern_test.go.tmpl expects individual per-category files.",
+  "categories": [
+    {
+      "category": "sqli",
+      "patterns": [
+        {
+          "id": "SQLI_BASIC_001",
+          "description": "Basic SQL injection with single quote OR",
+          "payload": "' OR '1'='1",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} SQLi] SQL Injection Attempt",
+          "attack_type": "sqli",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "SQLI_ENCODED_001",
+          "description": "URL-encoded SQL injection",
+          "payload": "%27%20OR%20%271%27%3D%271",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} SQLi] SQL Injection Attempt",
+          "attack_type": "sqli",
+          "severity": "high",
+          "encoding": "url"
+        },
+        {
+          "id": "SQLI_UNION_001",
+          "description": "UNION SELECT injection",
+          "payload": "1 UNION SELECT username,password FROM users--",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} SQLi] SQL Injection Attempt",
+          "attack_type": "sqli",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "SQLI_SLEEP_001",
+          "description": "Time-based blind SQL injection with SLEEP",
+          "payload": "1' AND SLEEP(5)--",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} SQLi] SQL Injection Attempt",
+          "attack_type": "sqli",
+          "severity": "high",
+          "encoding": "none"
+        }
+      ]
+    },
+    {
+      "category": "xss",
+      "patterns": [
+        {
+          "id": "XSS_BASIC_001",
+          "description": "Basic script tag injection",
+          "payload": "<script>alert('XSS')</script>",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} XSS] Cross-Site Scripting Attempt",
+          "attack_type": "xss",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "XSS_EVENT_001",
+          "description": "Event handler injection",
+          "payload": "<img onerror=alert(1) src=x>",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} XSS] Cross-Site Scripting Attempt",
+          "attack_type": "xss",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "XSS_JS_URI_001",
+          "description": "JavaScript URI injection",
+          "payload": "javascript:alert(document.cookie)",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} XSS] Cross-Site Scripting Attempt",
+          "attack_type": "xss",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "XSS_ENCODED_001",
+          "description": "URL-encoded script tag",
+          "payload": "%3cscript%3ealert(1)%3c/script%3e",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} XSS] Cross-Site Scripting Attempt",
+          "attack_type": "xss",
+          "severity": "high",
+          "encoding": "url"
+        }
+      ]
+    },
+    {
+      "category": "path_traversal",
+      "patterns": [
+        {
+          "id": "PT_BASIC_001",
+          "description": "Basic dot-dot-slash traversal to /etc/passwd",
+          "payload": "../../../../etc/passwd",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} PathTraversal] Path Traversal Attempt",
+          "attack_type": "path_traversal",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "PT_ENCODED_001",
+          "description": "URL-encoded path traversal",
+          "payload": "..%2f..%2f..%2fetc%2fpasswd",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} PathTraversal] Path Traversal Attempt",
+          "attack_type": "path_traversal",
+          "severity": "high",
+          "encoding": "url"
+        },
+        {
+          "id": "PT_DOUBLE_ENCODED_001",
+          "description": "Double URL-encoded path traversal",
+          "payload": "..%252f..%252f..%252fetc%252fpasswd",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} PathTraversal] Path Traversal Attempt",
+          "attack_type": "path_traversal",
+          "severity": "high",
+          "encoding": "double-url"
+        },
+        {
+          "id": "PT_ETC_SHADOW_001",
+          "description": "Direct /etc/shadow access attempt",
+          "payload": "/etc/shadow",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} PathTraversal] Path Traversal Attempt",
+          "attack_type": "path_traversal",
+          "severity": "high",
+          "encoding": "none"
+        }
+      ]
+    },
+    {
+      "category": "cmd_injection",
+      "patterns": [
+        {
+          "id": "CMDI_BASIC_001",
+          "description": "Semicolon-based command injection with ls",
+          "payload": ";ls -la /",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} CMDi] Command Injection Attempt",
+          "attack_type": "cmd_injection",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "CMDI_SUBSHELL_001",
+          "description": "Subshell command injection",
+          "payload": "$(cat /etc/passwd)",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} CMDi] Command Injection Attempt",
+          "attack_type": "cmd_injection",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "CMDI_PIPE_001",
+          "description": "Pipe-based command injection",
+          "payload": "|cat /etc/passwd",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} CMDi] Command Injection Attempt",
+          "attack_type": "cmd_injection",
+          "severity": "high",
+          "encoding": "none"
+        },
+        {
+          "id": "CMDI_ID_001",
+          "description": "Command injection with id command",
+          "payload": ";id",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} CMDi] Command Injection Attempt",
+          "attack_type": "cmd_injection",
+          "severity": "high",
+          "encoding": "none"
+        }
+      ]
+    },
+    {
+      "category": "suspicious_agent",
+      "patterns": [
+        {
+          "id": "UA_SQLMAP_001",
+          "description": "sqlmap scanner User-Agent",
+          "payload": "sqlmap/1.5.2#stable (https://sqlmap.org)",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} UA] Suspicious User-Agent Detected",
+          "attack_type": "suspicious_agent",
+          "severity": "medium",
+          "encoding": "none",
+          "field": "user_agent"
+        },
+        {
+          "id": "UA_NIKTO_001",
+          "description": "Nikto scanner User-Agent",
+          "payload": "nikto/2.1.6",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} UA] Suspicious User-Agent Detected",
+          "attack_type": "suspicious_agent",
+          "severity": "medium",
+          "encoding": "none",
+          "field": "user_agent"
+        },
+        {
+          "id": "UA_NMAP_001",
+          "description": "Nmap scanner User-Agent",
+          "payload": "Nmap Scripting Engine; https://nmap.org/book/nse.html",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} UA] Suspicious User-Agent Detected",
+          "attack_type": "suspicious_agent",
+          "severity": "medium",
+          "encoding": "none",
+          "field": "user_agent"
+        },
+        {
+          "id": "UA_DIRBUSTER_001",
+          "description": "DirBuster scanner User-Agent",
+          "payload": "DirBuster-1.0-RC1 (http://www.owasp.org/index.php/Category:OWASP_DirBuster_Project)",
+          "expected_rule": "[${PLUGIN_NAME_UPPER} UA] Suspicious User-Agent Detected",
+          "attack_type": "suspicious_agent",
+          "severity": "medium",
+          "encoding": "none",
+          "field": "user_agent"
+        }
+      ]
+    },
+    {
+      "category": "benign",
+      "patterns": [
+        {
+          "id": "BENIGN_NORMAL_001",
+          "description": "Normal HTTP GET request",
+          "payload": "/api/v1/users?page=1&limit=20",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "format": "combined",
+          "note": "Standard pagination query should not trigger any detection"
+        },
+        {
+          "id": "BENIGN_NORMAL_002",
+          "description": "Normal POST request with form data",
+          "payload": "/api/v1/login",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "format": "combined",
+          "note": "Standard login endpoint"
+        },
+        {
+          "id": "BENIGN_NORMAL_003",
+          "description": "Normal static asset request",
+          "payload": "/static/css/main.min.css",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "format": "combined",
+          "note": "Static file with dots should not trigger path traversal"
+        },
+        {
+          "id": "BENIGN_UA_001",
+          "description": "Normal browser User-Agent",
+          "payload": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "field": "user_agent",
+          "note": "Standard Chrome/Safari User-Agent"
+        },
+        {
+          "id": "BENIGN_JSON_001",
+          "description": "Normal JSON log line",
+          "payload": "{\"remote_addr\":\"10.0.0.1\",\"method\":\"GET\",\"path\":\"/health\",\"status\":200}",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "format": "json",
+          "note": "Health check endpoint in JSON format"
+        },
+        {
+          "id": "BENIGN_QUERY_001",
+          "description": "Query string with special but safe characters",
+          "payload": "/search?q=hello+world&lang=en-US&sort=date",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "format": "combined",
+          "note": "URL-encoded space (+) and hyphens should not trigger"
+        }
+      ]
+    },
+    {
+      "category": "edge_cases",
+      "patterns": [
+        {
+          "id": "EDGE_SIZE_UNDER_001",
+          "description": "Input just under 10KB limit (10239 bytes)",
+          "payload": "PLACEHOLDER_10239_BYTES",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "note": "10239 bytes should be processed normally. Test generator should create exact-size payload."
+        },
+        {
+          "id": "EDGE_SIZE_EXACT_001",
+          "description": "Input exactly at 10KB limit (10240 bytes)",
+          "payload": "PLACEHOLDER_10240_BYTES",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "note": "Exactly 10KB should be processed normally. Test generator should create exact-size payload."
+        },
+        {
+          "id": "EDGE_SIZE_OVER_001",
+          "description": "Input just over 10KB limit (10241 bytes) with threat at start",
+          "payload": "PLACEHOLDER_10241_BYTES_WITH_SQLI",
+          "expected_threat": "sqli",
+          "attack_type": "sqli",
+          "severity": "high",
+          "encoding": "none",
+          "note": "10241 bytes truncated to 10KB should still detect threat in first 10KB. Test generator should create payload with SQLi pattern at start."
+        },
+        {
+          "id": "EDGE_EMPTY_001",
+          "description": "Empty string input",
+          "payload": "",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "note": "Empty input should return no threat"
+        },
+        {
+          "id": "EDGE_WHITESPACE_001",
+          "description": "Whitespace-only input",
+          "payload": "   \t  \n  ",
+          "expected_threat": "none",
+          "attack_type": "none",
+          "severity": "none",
+          "encoding": "none",
+          "note": "Whitespace should return no threat"
+        }
+      ]
+    }
+  ]
+}
