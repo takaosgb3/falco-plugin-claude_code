@@ -1,0 +1,45 @@
+# Falco Rules for claude-code plugin (Phase 1 scaffold)
+#
+# This file contains the T-001 reference rule from requirements v3 §12.3.
+# T-002..T-018 (§12.4) are added in Phase 3 by the plugin-rules SKILL.
+#
+# Constraints (do NOT remove):
+#   - P003 / R-001: every rule MUST have `source: claude_code`
+#   - P005 / R-002: do NOT use `evt.type` in plugin rules
+#   - R-003     : `required_plugin_versions` must be at the top of the file
+#   - R-011     : compare boolean-string fields with literals "true" / "false"
+
+- required_plugin_versions:
+    - name: claude-code
+      version: 0.1.0
+
+# --- Macros (Phase 3 will expand; only the minimum needed by T-001 is here) ---
+
+- macro: claude_code_is_bash
+  condition: claude_code.tool_name = "Bash"
+
+- macro: claude_code_is_tool_preflight
+  condition: claude_code.event_name in ("PreToolUse", "PermissionRequest")
+
+# --- T-001: Dangerous Bash Command (CRITICAL) ---
+# Reference rule from §12.3. Phase 3 expands the pattern set and adds T-002..T-018.
+
+- rule: "[CLAUDE_CODE CRITICAL] Dangerous Bash Command"
+  desc: Detect dangerous Bash commands attempted by Claude Code
+  condition: >
+    claude_code_is_tool_preflight and
+    claude_code_is_bash and
+    (
+      claude_code.command icontains "rm -rf /" or
+      (claude_code.command icontains "curl" and claude_code.command icontains "| sh") or
+      claude_code.command icontains "chmod 777" or
+      claude_code.command icontains "mkfs" or
+      claude_code.command icontains "dd if="
+    )
+  output: >
+    [CLAUDE_CODE] dangerous bash command
+    (session=%claude_code.session_id user=%claude_code.user cwd=%claude_code.cwd
+    command=%claude_code.command evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: CRITICAL
+  source: claude_code
+  tags: [claude_code, ai_agent, bash, critical, T-001]

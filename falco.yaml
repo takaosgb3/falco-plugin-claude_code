@@ -1,0 +1,26 @@
+# Falco configuration for claude-code plugin (Linux production)
+# - P008: load_plugins is REQUIRED (without it, the plugin is ignored)
+# - P009: rate: 0 / max_burst: 0 to prevent alert suppression
+# - Per requirements v3 §22.1.1 the JSONL is at ~/.claude/security/events.jsonl
+#   on the operator's user home; for a system-wide install you may move it to
+#   /var/log/claude-code/events.jsonl. Adjust init_config.log_paths accordingly.
+
+plugins:
+  - name: claude-code
+    library_path: /usr/share/falco/plugins/libclaude-code-plugin.so
+    init_config: |
+      {"log_paths": ["~/.claude/security/events.jsonl"]}
+
+# P008: REQUIRED - without this directive the plugin is not loaded.
+load_plugins: [claude-code]
+
+# P007: individual file paths (not directory paths)
+rules_files:
+  - /etc/falco/rules.d/claude-code_rules.yaml
+
+stdout_output:
+  enabled: true
+
+outputs:
+  rate: 0      # P009: no rate limiting
+  max_burst: 0 # P009: no burst limiting

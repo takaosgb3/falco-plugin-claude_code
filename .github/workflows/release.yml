@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run Tests
+        run: go test ./... -v -race
+
+      - name: Run Vet
+        run: go vet ./...
+
+  build:
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            ext: .so
+            binary: libclaude-code-plugin-linux-amd64.so
+            logger: claude-code-security-logger-linux-amd64
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            ext: .dylib
+            binary: libclaude-code-plugin-darwin-arm64.dylib
+            logger: claude-code-security-logger-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Release Binary
+        run: make build-release
+
+      - name: Generate Checksums
+        run: |
+          shasum -a 256 ${{ matrix.binary }} > ${{ matrix.binary }}.sha256
+          shasum -a 256 ${{ matrix.logger }} > ${{ matrix.logger }}.sha256
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ matrix.binary }}
+            ${{ matrix.binary }}.sha256
+            ${{ matrix.logger }}
+            ${{ matrix.logger }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.so
+            artifacts/**/*.dylib
+            artifacts/**/claude-code-security-logger-*
+            artifacts/**/*.sha256
+            rules/claude-code_rules.yaml
+            falco-local.yaml

@@ -1,0 +1,24 @@
+# Local Falco configuration for claude-code plugin (macOS development)
+# Requirements v3 §7.2 / §18.1
+# - P017: macOS Falco rejects outputs: section -> excluded here
+# - P018: Run with `-U` flag: falco -c falco-local.yaml --disable-source syscall -U
+# - MAC-003 / MAC-004: macOS local runtime is the primary target for v0.1
+
+plugins:
+  - name: claude-code
+    library_path: ./libclaude-code-plugin-darwin-arm64.dylib
+    init_config: |
+      {"log_paths": ["~/.claude/security/events.jsonl"]}
+
+# P008: REQUIRED
+load_plugins: [claude-code]
+
+# P007: individual file paths
+rules_files:
+  - ./rules/claude-code_rules.yaml
+
+stdout_output:
+  enabled: true
+
+# P009: no rate limiting (macOS cannot use outputs: section due to P017)
+# Set rate/max_burst at Falco CLI level if needed: --option outputs.rate=0

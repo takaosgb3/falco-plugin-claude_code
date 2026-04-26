@@ -1,0 +1,27 @@
+# Falco configuration for claude-code plugin (Docker / container)
+# Requirements v3 §22.5 — container support is best-effort in v0.1
+
+plugins:
+  - name: claude-code
+    library_path: /usr/share/falco/plugins/libclaude-code-plugin.so
+    init_config: |
+      {
+        "log_paths": ["/var/log/claude-code/events.jsonl"],
+        "event_buffer_size": 1000
+      }
+
+# P008: REQUIRED
+load_plugins: [claude-code]
+
+# P007: individual file paths
+rules_files:
+  - /etc/falco/rules.d/claude-code_rules.yaml
+
+stdout_output:
+  enabled: true
+
+json_output: true
+
+outputs:
+  rate: 0      # P009
+  max_burst: 0 # P009
