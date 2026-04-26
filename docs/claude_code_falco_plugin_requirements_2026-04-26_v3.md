@@ -1707,7 +1707,7 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 | 18 | LogSource（CLAUDE.md / README で監視対象を表示） | `Claude Code Hooks (normalized JSONL via claude-code-security-logger)` | §6.1 |
 | 19 | ドメイン固有フィールド一覧（`${DOMAIN_FIELDS_*}` 用） | §10.2 の `claude_code.*` 全フィールド表をそのまま投入 | §10.2 |
 
-> **補足**: 項目 19 で投入するフィールドは §10.2 の表（`claude_code.schema_version` 〜 `claude_code.raw_excerpt` の全 28 項目）を JSON / YAML / CSV のどれかで scaffold スキルに渡す。スキル側のフォーマットに従うこと。詳細は dev-kit `.claude/skills/plugin-scaffold/SKILL.md` を参照。
+> **補足**: 項目 19 で投入するフィールドは §10.2 の表（`claude_code.schema_version` 〜 `claude_code.raw_excerpt` の全 37 項目）を JSON / YAML / CSV のどれかで scaffold スキルに渡す。スキル側のフォーマットに従うこと。詳細は dev-kit `.claude/skills/plugin-scaffold/SKILL.md` を参照。
 
 ---
 
