@@ -13,6 +13,69 @@
 
 ---
 
+## 目次
+
+- §-1 改訂履歴
+- §0 v3 で明確に修正した重要事項
+- §1 要約
+- §2 参照したドキュメントと読み取り結果
+- §3 背景と現状把握
+  - §3.3.1 OpenClaw からの流用不可領域（Non-portable areas）
+- §4 目的、ゴール、非ゴール
+- §5 推奨アーキテクチャ
+- §6 コンポーネント要件（Hook logger / event store / source plugin）
+- §7 macOS local runtime 要件
+- §8 リアルタイム検知要件
+- §9 OpenTelemetry 連携要件
+- §10 Event schema 要件
+- §11 Threat model（TR-001〜TR-010 主要リスク）
+- §12 脅威カテゴリと検知要件（T-001〜T-018）
+- §13 Rules 要件（R-001〜R-011）
+- §14 Parser / Detector 要件
+- §15 Detection と Prevention の分担
+- §16 Claude Code 設定・権限・MCP 監査要件
+- §17 Security / Privacy 要件
+  - §17.1 Redaction 最小パターン
+- §18 Falco 設定要件
+  - §18.4 PROBLEM_PATTERNS との対応マッピング
+- §19 開発ワークフロー要件（Phase 0〜6）
+- §20 テスト要件（3 層 E2E + Claude Code 固有）
+- §21 Build / Release 要件
+  - §21.3 Supply chain 対応（SBOM / 署名 / SLSA）
+- §22 運用要件（個人 / チーム / 企業）
+  - §22.4 Health check / 監視戦略
+  - §22.5 Container / Kubernetes での扱い
+- §23 リスク、未解決課題、整合性チェック（RK-001〜RK-012）
+- §24 v0.1 Minimum Viable Scope
+- §25 v0.2 以降のロードマップ
+- §26 受け入れ基準
+- §27 実装時の初期値
+  - §27.1 プラグイン基本値
+  - §27.2 ツールチェーンとプラットフォーム要件
+- §28 付録A: Hook event coverage matrix
+- §29 付録B: Minimal Falco rule pack 構成
+- §30 付録C: README で必ず強調する文言
+- §31 付録D: 作業中コンテキスト保持メモ
+- §32 最終判断
+
+---
+
+## 改訂履歴
+
+| 改訂 | 日付 | 編集者 | 概要 |
+|---|---|---|---|
+| v3.0 (initial) | 2026-04-26 | FALCOYA / takaosgb3 | v1/v2 とアーキテクチャ深掘りメモを統合した v3 初版（1378 行） |
+| v3.1 (Round 1) | 2026-04-26 | review by Claude Code | 7 件適用: §10.2 型変換注釈、permission_mode 値の修正、§29 付録B に T-013/T-015/T-016/T-017/T-018 追加、§27 を §27.1/§27.2 分割（SDK/Go/Falco/macOS/Linux/GLIBC/License）、§18.4 PROBLEM_PATTERNS マッピング新設、Plugin ID 衝突注意、timestamp timezone ポリシー |
+| v3.2 (Round 2) | 2026-04-26 | review by Claude Code | 8 件適用: TOC 追加、§6.1.3 matcher 文法注釈、§17.1 redaction 最小 regex 表新設、§22.4 Health check / 監視戦略 (OPS-001〜OPS-006)、§22.5 Container/Kubernetes 方針、§21.3 SBOM/署名/SLSA (SC-001〜SC-006)、§28 hook event 仕様確認注釈、§27.2 SDK バージョン v0.8.1 確定 |
+| v3.3 (Round 3) | 2026-04-26 | review by Claude Code | 6 件適用: §11.4 リスク表に TR-001〜TR-010 ID 付与・RK-* 相互参照、§13 R-011 boolean string field 比較リテラル、§12.1 priority 凡例、§12.3 condition 括弧明示、§3.3.1 OpenClaw 流用不可/再利用領域、§24 「最低 10 / 目標 18 ルール」明示 |
+| v3.4 (Round 4) | 2026-04-26 | review by Claude Code | 7 件適用: §18.4 セクションレベル降格 (h2→h3)、§22.4 OPS-005 doctor CLI exit code 仕様、§22.4 OPS-004 self-check 運用注記、§6.1.3 tool 名 Agent/Task 統一注釈、§31 付録D 10→15 項目拡張、§32 冒頭 §0/§1/§32 役割分担明示、TOC 全更新 |
+| v3.5 (Round 5) | 2026-04-26 | review by Claude Code | 2 件適用: §25 ロードマップに supply-chain (v0.2)/container (v0.3)/Falco DaemonSet (v0.4)/SLSA L3 (v0.6) 反映、§30 末尾に v0.2 以降 SBOM/署名検証 README 注記と v0.1 で `sha256sum -c` 案内 |
+
+> 詳細な所見・抽出論点は `docs/review/round{1..5}.md`、5 ラウンド集計は `docs/review/convergence_report.md`、進捗は GitHub Issue #1 を参照。
+> 累計 5 ラウンドで 30 件の修正を適用、行数 1378 → 約 1610 行に拡張、ID 体系 17 種で連続性を確認、未完了マーカー 0 件で収束。
+
+---
+
 ## 0. この v3 で明確に修正した重要事項
 
 本 v3 では、これまでの議論で曖昧だった点を明確に修正する。
@@ -119,6 +182,25 @@ OpenClaw は「AIアシスタントログの脅威検知」として近いが、
 | macOS local runtime | 実装依存 | Claude Code 使用端末として正式対象 |
 | OTel | 補助的 | Claude Code native OTel と相関可能 |
 | plugin 配布 | Falco plugin中心 | Falco plugin + hook logger + optional Claude Code plugin bundle |
+
+#### 3.3.1 OpenClaw から流用してはいけない領域（Non-portable areas）
+
+参照実装としてコードや設計を読むのは有益だが、本プロジェクトに **そのまま** 持ち込んではいけない領域を明示する。
+
+| 領域 | 流用不可の理由 |
+|---|---|
+| Event schema / field 定義 | OpenClaw の `openclaw.*` フィールドと Claude Code の `claude_code.*` は別 source。Field 名・型・意味論を揃える必然性がない。Field 名を真似ると Falco rule 移植時に混乱する。 |
+| Permission model | OpenClaw には Claude Code の `permission_mode` / `PermissionRequest` / `bypassPermissions` 等の概念がない。Permission 関連は本要件 §10 / §16 にもとづいて新規設計する。 |
+| MCP 監査 | OpenClaw は MCP（Model Context Protocol）非対応。MCP リスク検知は本要件 §12 T-007 / T-008 / T-018 で新規定義する。 |
+| Hook 概念 | OpenClaw は AI assistant 直のログ tail。本要件は Hook 経由の logger を介する。データフロー（§5.1）が異なるため、tail 周りのコードは流用しても hook 受け口は新設する。 |
+| Subagent / Task 概念 | OpenClaw に subagent / task イベントは無い。T-013 / T-014 は新規実装。 |
+| Severity / risk 体系 | OpenClaw のカテゴリ分けは流用せず、§12.1 T-001〜T-018 と §14.2 detector を主とする。 |
+
+ただし、**安全に再利用してよい領域** は次の通り。
+- JSONL tail / fsnotify / rotation reopen の I/O 骨格（P014 / P015 を満たす形で）
+- ReDoS safe な文字列検査ヘルパ
+- benign / true positive の test fixture 構成方法
+- Makefile / golangci.yml / CI workflow のスケルトン
 
 ---
 
@@ -345,7 +427,16 @@ Hook logger は Falco plugin そのものではなく、Claude Code と Falco pl
 }
 ```
 
-注意: 実際の matcher は Claude Code の仕様に従い、`.*` のような広すぎる指定が有効か・期待通りかをテストで確認する。v0.1 の安全な初期値は、主要ツール名を明示列挙し、MCP tool は別途 matcher 仕様に合わせる。
+> **matcher 文法と推奨初期値**:
+> - Claude Code の matcher は正規表現として解釈される。`Bash|Edit` は OR、`.*` は任意ツールにマッチする。
+> - 上記サンプルの `Bash|Read|Write|Edit|WebFetch|WebSearch|Agent|.*` は `.*` がすべてにマッチするため列挙部分は冗長。意図を明確にするには次のいずれかを推奨する。
+>   - **明示列挙パターン**: `^(Bash|Read|Write|Edit|WebFetch|WebSearch|Task)$` のように主要ツール名のみ。MCP tool は `mcp__.*` で別 matcher を追加する。
+>   - **完全網羅パターン**: `.*` 単独。すべての tool を logger に渡す代わりに、誤分類を logger 側のクラス分けで吸収する。
+> - tool 名（例: `Agent` / `Task` / `Read`）は Claude Code 公式仕様に依存する。最新ツール名は Claude Code Hooks ドキュメントで確認し、リリース前に fixtures との整合をテストする。
+>
+> **本サンプルの位置づけ**: 上記は最小例であり、§28 の Hook event coverage matrix で「必須」とした `PostToolBatch` / `FileChanged` / `PermissionDenied` / `SessionEnd` 等は省略している。実運用では §28 と §24 v0.1 必須スコープに従い、必要 hook をすべて追加する。
+>
+> **tool 名の統一注意**: 本要件では subagent 起動 tool 名として一部で `Agent`、別箇所で `Task` を例示している（Claude Code は時期により tool 名が `Task` / `Agent` / 双方存在する場合あり）。実装時は最新の Claude Code Hooks 仕様 (`https://code.claude.com/docs/en/hooks`) を確認して fixtures を揃え、不要な tool 名は matcher から削除する。曖昧な期間では `.*` で fallback し、logger 内で正規化フィールド `tool_name` を統一表記に揃える方針を取る。
 
 ### 6.2 JSONL event store
 
@@ -365,7 +456,7 @@ Hook logger は Falco plugin そのものではなく、Claude Code と Falco pl
 |---|---|---|
 | FP-001 | Event source | `claude_code` を広告する。 |
 | FP-002 | Plugin name | `claude-code` を推奨。Falco yaml の `load_plugins` と一致させる。 |
-| FP-003 | Plugin ID | 開発中は `999`。公開前に Falco Plugin Registry で正式IDを取得する。 |
+| FP-003 | Plugin ID | 開発中は `999`。公開前に Falco Plugin Registry (`https://github.com/falcosecurity/plugins`) で正式 ID を取得する。`999` が他プラグインで予約されている場合は別の暫定値（10000番台）に変更する。Registry 登録時には plugin name / event source / source plugin ID の三つを Falco Project と調整する。 |
 | FP-004 | Capabilities | event sourcing + field extraction。event parsing / async events は v0.1 非対象。 |
 | FP-005 | InitSchema | log path、start_at、buffer size、poll interval、debug、redaction policy、replay mode を設定可能にする。 |
 | FP-006 | Open | file tail、watcher、polling fallback、SeekEnd default、rotation reopen を初期化する。 |
@@ -541,6 +632,8 @@ service:
 
 ### 10.1 正規化イベント例
 
+> **timezone ポリシー**: timestamp は RFC3339 形式（`2006-01-02T15:04:05.000Z07:00`）で local + offset を許容する。下記サンプルは `+09:00` だが、組織横断で集約する場合は logger 側で UTC (`Z`) に正規化することを推奨する。Falco rule 側で時刻比較を行う場合は `claude_code.received_at` を string で扱い、SIEM/OTel 側で時刻正規化を行う。
+
 ```json
 {
   "schema_version": "claude_code_security_event/v1",
@@ -576,6 +669,20 @@ service:
 
 Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64` を中心にする。boolean は `string` (`"true"/"false"`) または `uint64` (`0/1`) で表現する。
 
+> **schema event ↔ Falco field の型変換**: §10.1 の正規化イベントは JSON 表現であり boolean / number をそのまま含む。Falco field は SDK 制約により `string` または `uint64` に限定されるため、Extract() 内で変換する。たとえば schema 上の `dropped: false` は Falco field `claude_code.dropped` として `"false"` に、`risk_score: 90` は `claude_code.risk_score` として `90 (uint64)` に変換される。Falco rules では文字列比較（`claude_code.dropped = "true"`）または数値比較（`claude_code.risk_score >= 70`）で評価する。
+>
+> **Go 実装例**:
+> ```go
+> // boolean → string
+> req.SetValue(strconv.FormatBool(event.Dropped))   // "true" / "false"
+>
+> // int / float → uint64
+> req.SetValue(uint64(event.RiskScore))             // 0..255 の範囲を超えないこと
+>
+> // negative number は uint64 に直接入れない（unsigned overflow）。0 にクリップ or 別フィールドへ
+> if event.LatencyMs < 0 { req.SetValue(uint64(0)) } else { req.SetValue(uint64(event.LatencyMs)) }
+> ```
+
 | Field | Type | 説明 |
 |---|---|---|
 | `claude_code.schema_version` | string | normalized event schema |
@@ -586,7 +693,7 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
 | `claude_code.session_id` | string | Claude Code session id |
 | `claude_code.transcript_path` | string | transcript path。raw transcriptは読まない |
 | `claude_code.cwd` | string | current working directory |
-| `claude_code.permission_mode` | string | default/acceptEdits/plan/auto/dontAsk/bypassPermissions |
+| `claude_code.permission_mode` | string | Claude Code が公式に提供する permission mode 値（v3 時点: `default`, `acceptEdits`, `plan`, `bypassPermissions`）。Claude Code 側の仕様変更で値が増減する可能性があるため、parser は unknown 値をそのまま保持し rule 側で扱う。`permissions.dontAsk` は permission_mode の値ではなく settings 配下の別フィールドであり、`claude_code.permission_destination` または専用 field で扱う |
 | `claude_code.event_name` | string | Hook event name |
 | `claude_code.source` | string | ConfigChange等の source |
 | `claude_code.tool_name` | string | Bash/Read/Write/Edit/WebFetch/MCP tool等 |
@@ -602,7 +709,7 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
 | `claude_code.mcp_scope` | string | user/project/local/plugin/managed |
 | `claude_code.permission_destination` | string | session/localSettings/projectSettings/userSettings等 |
 | `claude_code.permission_behavior` | string | allow/deny/ask等 |
-| `claude_code.risk_type` | string | detectorが付与したカテゴリ |
+| `claude_code.risk_type` | string | detector が付与するカテゴリ。命名規約: snake_case で T-* と 1:1 対応（`T-001` → `dangerous_bash`, `T-002` → `secret_exfiltration`, `T-003` → `permission_bypass`, `T-004` → `permission_update`, `T-005` → `settings_modified`, `T-006` → `hook_disabled`, `T-007` → `mcp_config_changed`, `T-008` → `mcp_tool_suspicious`, `T-009` → `sensitive_file_read`, `T-010` → `workspace_escape`, `T-011` → `git_destructive`, `T-012` → `prompt_injection`, `T-013` → `agent_risk`, `T-014` → `tool_storm`, `T-015` → `external_fetch_sensitive`, `T-016` → `policy_downgrade`, `T-017` → `skill_shell`, `T-018` → `channel_push`） |
 | `claude_code.risk_score` | uint64 | 0-100 |
 | `claude_code.severity` | string | critical/warning/notice/info |
 | `claude_code.evidence` | string | redacted evidence |
@@ -671,24 +778,39 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
 
 ### 11.4 主要リスクと対策
 
-| リスク | 影響 | 対策 |
-|---|---|---|
-| Hook logger自体のコマンド注入 | 高 | shell scriptではなくGo binary、絶対パス、stdin JSON parse、stdout quiet。 |
-| secretsのログ保存 | 高 | redaction、field length limit、raw payload無効、0600。 |
-| Hook無効化 | 高 | `ConfigChange`監査、managed settings、hook presence check。 |
-| `.claude/settings.json` による権限緩和 | 高 | ConfigChange + FileChanged + rulesで検知。 |
-| MCP server追加 | 高 | `.mcp.json` / `~/.claude.json` / plugin MCP監査。 |
-| alert latency過大 | 中 | fsnotify + polling, SLO test, NextBatch tuning。 |
-| False positive過多 | 中 | category別 severity、benign test、allowlist。 |
-| Falco rule不発火 | 高 | `source: claude_code`, `evt.type`不使用、Field/Extract一致チェック。 |
-| macOS/Linux artifact混同 | 高 | `.dylib`/`.so`分離、`file`検証、release naming。 |
-| cross-source相関誤解 | 中 | Falco内相関しない。OTel/SIEMで相関。 |
+> 本表は §11 Threat model の文脈で導出されるリスク（`TR-*` = Threat-Risk）。実装・運用全般のリスクは §23.1 `RK-*` で別管理する。一部は概念的に重なるため右端列に対応する `RK-*` を併記し、相互参照を明示する。
+
+| ID | リスク | 影響 | 対策 | 関連 RK-* |
+|---|---|---|---|---|
+| TR-001 | Hook logger 自体のコマンド注入 | 高 | shell scriptではなく Go binary、絶対パス、stdin JSON parse、stdout quiet | RK-003 |
+| TR-002 | secrets のログ保存 | 高 | redaction、field length limit、raw payload 無効、0600 | RK-004 |
+| TR-003 | Hook 無効化 | 高 | `ConfigChange` 監査、managed settings、hook presence check | RK-011 |
+| TR-004 | `.claude/settings.json` による権限緩和 | 高 | ConfigChange + FileChanged + rules で検知 | （該当 RK 無し: 個別 rule で吸収） |
+| TR-005 | MCP server 追加 | 高 | `.mcp.json` / `~/.claude.json` / plugin MCP 監査 | RK-010 |
+| TR-006 | alert latency 過大 | 中 | fsnotify + polling, SLO test, NextBatch tuning | RK-008 |
+| TR-007 | False positive 過多 | 中 | category 別 severity、benign test、allowlist | RK-009 |
+| TR-008 | Falco rule 不発火 | 高 | `source: claude_code`, `evt.type` 不使用、Field/Extract 一致チェック | RK-006 |
+| TR-009 | macOS/Linux artifact 混同 | 高 | `.dylib`/`.so` 分離、`file` 検証、release naming | RK-005 |
+| TR-010 | cross-source 相関誤解 | 中 | Falco 内相関しない。OTel/SIEM で相関 | RK-012 |
 
 ---
 
 ## 12. 脅威カテゴリと検知要件
 
 ### 12.1 v0.1 必須カテゴリ
+
+> **Priority 凡例**:
+> - `CRITICAL`: 即時対応すべき高リスク。on-call エスカレーション対象。
+> - `WARNING`: 高頻度の偽陽性が許容範囲なら通知、要レビュー。
+> - `NOTICE`: 統計・後追い分析向け。単発でアラートにせず集計対象とする。
+> - `NOTICE/WARNING`: ベース priority は `NOTICE` だが、`claude_code.risk_score >= 70` または特定の context（permission_mode が `bypassPermissions` 等）で `WARNING` に昇格する条件付き。詳細は §14.2 D-001 detector が付与する `severity` に従う。
+>
+> **Falco rule での書き分け方（v0.1 採用方針）**: Falco の仕様上、1 ルールに priority は 1 つしか書けない。条件付き昇格を実装する場合は、**カテゴリごとに 2 ルールに分割**する：
+> - 例: T-013 Agent Subagent Risk
+>   - `[CLAUDE_CODE NOTICE] Agent Subagent Risk (low)` … `condition: ... and claude_code.risk_score < 70`
+>   - `[CLAUDE_CODE WARNING] Agent Subagent Risk (high)` … `condition: ... and claude_code.risk_score >= 70`
+> - 共通 condition は **macro** に切り出して両ルールから参照する（DRY 原則）。
+> - 代替案として detector 側で `claude_code.severity` field を出し、ルールは `claude_code.severity = "warning"` で評価する方式もあるが、v0.1 では risk_score ベースの 2 ルール方式を主とする。
 
 | ID | カテゴリ | Priority | 主な入力 | 検知例 |
 |---|---|---|---|---|
@@ -736,7 +858,7 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
     claude_code.tool_name = "Bash" and
     (
       claude_code.command icontains "rm -rf /" or
-      claude_code.command icontains "curl" and claude_code.command icontains "| sh" or
+      (claude_code.command icontains "curl" and claude_code.command icontains "| sh") or
       claude_code.command icontains "chmod 777" or
       claude_code.command icontains "mkfs" or
       claude_code.command icontains "dd if="
@@ -751,6 +873,37 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
 ```
 
 注意: 実際の Falco condition で `and` / `or` の優先順位と括弧を必ず検証する。`evt.type` は使わない。全ルールに `source: claude_code` を付ける。
+
+> **本例は代表パターンのみ**。`rm -rf .`, `rm -rf *`, `rm -fr /` のような variant 等の網羅性は Phase 4 のテスト（benign / edge_cases 含む E2E パターン JSON）で検証し、必要なら detector 側の `risk_type` / `risk_score` を組み合わせる。
+
+### 12.4 T-002〜T-018 の condition 雛形（実装ガイド）
+
+T-001 以外の 17 カテゴリは、実装時に次の condition 雛形を起点として詳細化する。各雛形は dev-kit 側 `plugin-rules` スキル（T5-9）と Phase 4 の Level 1 パターンテストで検証する。
+
+| ID | condition 雛形（イメージ） |
+|---|---|
+| T-002 Secret Exfiltration | `tool_name in ("Bash","WebFetch") and (command icontains ".env" or command icontains "id_rsa" or command icontains "AKIA") and (command icontains "curl" or command icontains "scp" or command icontains "nc " or command icontains "pbcopy")` |
+| T-003 Permission Bypass Mode | `permission_mode = "bypassPermissions" or command icontains "--dangerously-skip-permissions" or evidence icontains "skipDangerousModePermissionPrompt"` |
+| T-004 Suspicious Permission Update | `event_name = "PermissionRequest" and permission_destination in ("userSettings","projectSettings") and permission_behavior = "allow"` |
+| T-005 Claude Settings Modified | `event_name in ("ConfigChange","FileChanged") and (file_path icontains "/.claude/settings.json" or file_path icontains "/.claude/settings.local.json")` |
+| T-006 Hook Disabled | `event_name = "ConfigChange" and (evidence icontains "disableAllHooks" or evidence icontains "hooks: null" or risk_score >= 90)` |
+| T-007 MCP Config Changed | `event_name in ("ConfigChange","FileChanged") and (file_path icontains ".mcp.json" or file_path icontains "/.claude.json" or file_path icontains "managed-mcp.json")` |
+| T-008 Suspicious MCP Tool Use | `tool_name startswith "mcp__" and (tool_name icontains "write" or tool_name icontains "delete" or tool_name icontains "admin" or tool_name icontains "export")` |
+| T-009 Sensitive File Read | `tool_name in ("Read","Grep","Glob") and (file_path icontains "/.env" or file_path icontains "id_rsa" or file_path icontains "/.git/config" or file_path icontains "/.kube/config")` |
+| T-010 Workspace Escape | `command icontains ".." or file_path startswith "/etc" or file_path icontains "/.ssh/"` |
+| T-011 Destructive Git | `tool_name = "Bash" and (command icontains "git reset --hard" or command icontains "git clean -fdx" or command icontains "git push --force" or command icontains "git branch -D")` |
+| T-012 Prompt Injection | `event_name in ("UserPromptSubmit","WebFetch") and (evidence icontains "ignore previous instructions" or evidence icontains "reveal system prompt" or evidence icontains "exfiltrate")` |
+| T-013 Agent/Subagent Risk | `event_name in ("SubagentStart","TaskCreated") and (risk_score >= 50 or permission_mode = "bypassPermissions")` |
+| T-014 Tool Storm | `event_name = "PostToolBatch" and tool_count >= 50` |
+| T-015 External Fetch + Sensitive | `tool_name in ("WebFetch","WebSearch") and risk_score >= 60` |
+| T-016 Config Policy Downgrade | `event_name = "ConfigChange" and (evidence icontains "disableBypassPermissionsMode: false" or evidence icontains "deny: []")` |
+| T-017 Skill Shell Execution | `event_name = "ConfigChange" and (file_path icontains "/.claude/skills/" or evidence icontains "shellExecution: true")` |
+| T-018 Channel/MCP Push | `event_name in ("ConfigChange","FileChanged") and evidence icontains "channel" and risk_score >= 50` |
+
+実装時の注意:
+- `*` で省略している部分は `claude_code.` プレフィックスを補う
+- `risk_score` は detector が付与（§14.2 D-001）。閾値は v0.1 既定（50/60/70/90）を使い、benign テストで調整する
+- 上記雛形は **概念モデル**であり、benign パターンとの競合がないか §29 付録 B の rule pack 実装時に必ず検証する
 
 ---
 
@@ -768,6 +921,7 @@ Falco SDK の制約と実装容易性を考え、初期は `string` と `uint64`
 | R-008 | `icontains` を中心にしつつ、複雑な条件は detector 側の `risk_type` / `risk_score` に寄せる。 |
 | R-009 | CRITICAL/WARNING/NOTICE の基準を文書化する。 |
 | R-010 | `falco -V` または YAML lint を CI で実行する。 |
+| R-011 | boolean 由来の string field（`claude_code.dropped` など、§10.2 で `string` 型化されている項目）は Falco rule 内で文字列リテラル `"true"` / `"false"` を用いて比較する。`= true` と書いてはならない（YAML / Falco rule engine では undefined 動作）。 |
 
 ---
 
@@ -877,13 +1031,37 @@ PreToolUse / PermissionRequest / ConfigChange → policy hook → allow / deny /
 | SEC-003 | Hook input は信頼しない。JSON parse、型チェック、サイズ制限を行う。 |
 | SEC-004 | `events.jsonl` は `0600`、directory は `0700`。 |
 | SEC-005 | Secret redaction は logger 側で行い、pluginに入る前に秘匿する。 |
-| SEC-006 | Authorization, Bearer, API key, SSH key, private key, cookie, token, password を検出・redactする。 |
+| SEC-006 | Authorization, Bearer, API key, SSH key, private key, cookie, token, password を検出・redactする。最小ターゲットは下表の §17.1 を満たすこと。 |
 | SEC-007 | raw prompt/tool_response は保存しない。debug時も redacted excerpt のみ。 |
 | SEC-008 | OTel raw API bodies は原則禁止。使用時は明示 consent、保存先、retention、権限を定義する。 |
 | SEC-009 | plugin/rules/logger の checksum を release asset に含める。 |
 | SEC-010 | hook logger の改ざん検知を future work として検討する。 |
 | SEC-011 | managed settings で hook/OTel/security policy を配布する企業利用パターンをサポートする。 |
 | SEC-012 | ログ保持期間を定義する。既定: local 7〜30日、centralは組織ポリシーに従う。 |
+
+### 17.1 Redaction 最小パターン
+
+実装で最低限カバーすべき redaction ターゲット。検出した値はマスク文字（例: `***REDACTED:<kind>***`）に置換する。pattern は ReDoS safe な anchored / bounded 正規表現とし、入力長は §14.2 D-004 のサイズ上限を超えない。
+
+| 種別 | 例 / 想定 pattern |
+|---|---|
+| AWS Access Key ID | `AKIA[0-9A-Z]{16}` |
+| AWS Secret Access Key | 40 文字 base64 風 + Authorization/`Secret` 系コンテキスト一致 |
+| GCP Service Account JSON | `"private_key":` を含む JSON サブツリー全体を redact |
+| Slack Bot/User Token | `xox[abprs]-[A-Za-z0-9-]{10,}` |
+| GitHub PAT | `ghp_[A-Za-z0-9]{36}`, `github_pat_[A-Za-z0-9_]{60,}` |
+| OpenAI / Anthropic API Key | `sk-[A-Za-z0-9_-]{20,}`, `sk-ant-[A-Za-z0-9_-]{20,}` |
+| OAuth Bearer | HTTP `Authorization: Bearer <token>`、`Authorization=` などの key/value |
+| Generic JWT | `eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}` |
+| RSA / SSH Private Key | `-----BEGIN [A-Z ]+PRIVATE KEY-----` から `-----END ` までのブロック全体 |
+| `.env` 形式 | `^[A-Z0-9_]+=` 行で値の右辺を redact |
+| Cookie header | `Cookie:` ヘッダ、`Set-Cookie:` の `name=value` の value 側 |
+| Cloud credentials path | `~/.aws/credentials`, `~/.kube/config`, `~/.gcp/...` への参照は path だけ残し、内容は読み込まない |
+
+実装時の注意:
+- すべて `(?i)` フラグ等の case-insensitive を許容するが、性能と ReDoS 安全性のため anchored / bounded を厳守する。
+- 検出件数は redaction counter（§6.3 FP-011）で観測可能にする。
+- 既存 OSS（`detect-secrets`, `gitleaks`）の pattern セットを参照しつつ、ライセンス互換性を確認して同梱または再実装する。
 
 ---
 
@@ -951,6 +1129,39 @@ stdout_output:
 | rulesに `evt.type` がない | plugin eventで不発火。 |
 | rate/max_burst がテスト時に無効化されている | alertが抑制される。 |
 | macOSで `-U` を使う | stdout alertが出ない場合がある。 |
+
+---
+
+### 18.4 PROBLEM_PATTERNS との対応マッピング
+
+`PROBLEM_PATTERNS.md`（dev-kit が蓄積した P001〜P021 + A コード）に整理された失敗パターンを、本要件のどこで吸収するかを明示する。実装・レビュー時はこの表を逆引きする。
+
+| Pコード | 失敗内容 | 対応する要件 |
+|---|---|---|
+| P001 | macOS バイナリを Linux 用に配布 | §7.4, §21.1, §21.2 B-003/B-004, AC-013 |
+| P002 | `-buildmode=c-shared` 不指定でロード不可 | §21.2 B-001, §27.2 ビルドフラグ |
+| P003 | rule に `source` 不指定 | §13 R-001, §18.3, §29 |
+| P004 | GOB nil map panic | §14.1 P-005 |
+| P005 | rule で `evt.type` を使用 | §13 R-002, §18.3, §29 |
+| P006 | counters / observability 不足 | §6.3 FP-011, §8.2 drop counter |
+| P007 | NextBatch busy loop | §6.3 FP-007, §8.3 |
+| P008 | `load_plugins` 不指定 | §18.3 |
+| P009 | rules_files 個別指定不足 | §18.3 |
+| P010 | Fields/Extract 不一致 | §6.3 FP-008/FP-009, §23.2 |
+| P011 | YAML コメント形式起因の parse error | §13 R-010 (YAML lint), Phase 3 Gate |
+| P012 | rules ファイル分割の重複定義 | §13 R-005 |
+| P013 | ビルド環境差異（macOS で Linux 用 .so） | §7.4, §21.2 B-002/B-005 |
+| P014 | 起動時に既存ログ全行再処理 | §6.2 ES-004, §14.1 P-006, §27 Start position |
+| P015 | log rotation でファイル追従不可 | §6.2 ES-005, §6.3 FP-006 |
+| P016 | log line truncation / 大型イベントで OOM | §6.1.1 HL-012, §14.2 D-004, §27 Max event size |
+| P017 | macOS Falco output 設定でクラッシュ | §7.2 MAC-002, §18.1 |
+| P018 | `-U` 不付与で macOS で alert 抑制 | §7.2 MAC-003, §18.3 |
+| P019 | 1 ルールに複数イベントが混入 | §13 R-005/R-006 |
+| P020 | required_plugin_versions 未指定で互換性破綻 | §13 R-003 |
+| P021 | release artifact 整合性チェック欠如 | §21.2 B-007, AC-013, SEC-009 |
+| A コード | nginx-proxy 由来の追加パターン群 | dev-kit Phase 6 の feedback で整理。本要件では `RK-*` リスクとして吸収 |
+
+> 実装中に該当パターンを踏みかけた場合は `/plugin-debug` を呼び、修正と同時に必要なら `dev-kit-feedback` で新しい P コード候補（または本マッピングの更新）を提出する。
 
 ---
 
@@ -1052,6 +1263,11 @@ falco-plugin-dev-kit の Phase 0〜6 に沿って進める。ただし Claude Co
 
 ### 20.2 必須fixture
 
+**配置先（標準）**: `test/fixtures/hook_events/<event_name>/<scenario>.json`
+（例: `test/fixtures/hook_events/PreToolUse/bash_dangerous.json`）
+
+Level 1 パターンテスト（`test/e2e/patterns/categories/<T-NNN>.json`）は本表のヒューマン fixture を引用してカテゴリ別 JSON を生成する。同じ fixture を Unit テストと Level 1 で共有する。
+
 | Fixture | 内容 |
 |---|---|
 | `pre_tool_use_bash_safe.json` | `npm test` 等の正常Bash |
@@ -1068,20 +1284,74 @@ falco-plugin-dev-kit の Phase 0〜6 に沿って進める。ただし Claude Co
 | `redaction_private_key.json` | private key redaction |
 | `malformed_line.txt` | 不正JSON |
 | `large_event.json` | サイズ制限 |
-| `rotation_scenario` | log rotate |
+| `rotation_scenario`（手順） | log rotate のシナリオ |
+
+#### 20.2.1 `rotation_scenario` の具体手順
+
+`rotation_scenario` は単一 fixture ではなく **シナリオ**である。Level 2 パイプラインテストの一部として次の流れを再現する:
+
+```go
+// Level 2 テスト内（plugin_test.go.tmpl の TestPipeline_Rotation）
+func TestPipeline_Rotation(t *testing.T) {
+    // 1) 既存 events.jsonl に 10 行書く
+    writeNLines(t, eventsPath, 10, "rotation-pre")
+
+    // 2) plugin Open() — SeekEnd で末尾から読み始める
+    plugin := initPlugin(t, []string{eventsPath})
+    inst := openAndCleanup(t, plugin)
+
+    // 3) plugin が稼働中に rename rotation を起こす
+    require.NoError(t, os.Rename(eventsPath, eventsPath+".1"))
+
+    // 4) 同名で新規 events.jsonl を作成し 5 行書く（新 inode）
+    writeNLines(t, eventsPath, 5, "rotation-post")
+
+    // 5) NextBatch で post-rotation の 5 行が取れること（pre-rotation の 10 行は SeekEnd で読まない）
+    events := drainEvents(t, inst, 5, 10*time.Second)
+    require.Len(t, events, 5)
+    for _, ev := range events {
+        require.Contains(t, ev.Raw, "rotation-post")
+    }
+}
+```
+
+代替パターンとして truncate rotation（`> events.jsonl` で同 inode の中身を空に）も別 TC として実装する。`P015 / RK-008 / FP-006` の検証対象。
 
 ### 20.3 受け入れ基準
 
-| ID | 基準 |
-|---|---|
-| TEST-001 | Unit tests が全て PASS。 |
-| TEST-002 | Level 1 pattern tests が T-001〜T-018 を網羅。 |
-| TEST-003 | benign pattern で重大false positiveがない。 |
-| TEST-004 | redaction test で secret値が出力されない。 |
-| TEST-005 | Level 2 pipeline が fsnotify/polling/rotation/backpressure を通す。 |
-| TEST-006 | Level 3 Falco integration で代表CRITICAL/WARNING/NOTICEが発火。 |
-| TEST-007 | macOS native test で alert が stdout JSON として出る。 |
-| TEST-008 | latency test が最低条件 p95 ≤ 5s を満たす。 |
+| ID | 基準 | 実行コマンド | 判定方法 |
+|---|---|---|---|
+| TEST-001 | Unit tests が全て PASS | `go test ./pkg/... -v -race -count=1` | exit 0 / PASS 行数 = 全テスト関数数 |
+| TEST-002 | Level 1 pattern tests が T-001〜T-018 を網羅 | `make e2e-pattern`（`go test ./test/e2e/ -v -run TestPattern`） | 全 T-* で True Positive 検出、テスト出力に `risk_type=<expected>` が含まれる |
+| TEST-003 | benign pattern で重大 false positive がない | `go test ./test/e2e/ -v -run TestPattern_Benign` | 全 benign fixture で `risk_score < 50` または検出なし |
+| TEST-004 | redaction test で secret 値が出力されない | `go test ./pkg/parser/ -v -run TestRedaction` | 出力 JSON に `AKIA*` `xoxb-*` `-----BEGIN .* PRIVATE KEY-----` 等が含まれない（grep -L） |
+| TEST-005 | Level 2 pipeline が fsnotify/polling/rotation/backpressure を通す | `make e2e-pipeline`（`go test ./cmd/plugin-sdk/ -v -race -run TestPipeline -timeout 120s`） | TestPipeline_FsNotify / TestPipeline_Polling / TestPipeline_Rotation / TestPipeline_Backpressure すべて PASS |
+| TEST-006 | Level 3 Falco integration で代表 CRITICAL/WARNING/NOTICE が発火 | `e2e/scripts/inject_patterns.sh` を実行し Falco stdout を `e2e/scripts/batch_analyzer.py` で解析 | 代表 3 ルール（T-001 / T-005 / T-013）の alert が JSON 出力に出現 |
+| TEST-007 | macOS native test で alert が stdout JSON として出る | `falco -c falco-local.yaml --disable-source syscall -U &` 後に Hook fixture を投入し stdout 観察 | `[CLAUDE_CODE` を含む alert 行が JSON で出力 |
+| TEST-008 | latency test が最低条件 p95 ≤ 5s を満たす | `go test ./test/latency/ -v -run TestLatencyP95` | 後述の §20.3.1 latency 計測手順 |
+
+#### 20.3.1 TEST-008 latency 計測手順
+
+```go
+// test/latency/latency_test.go (擬似コード)
+func TestLatencyP95(t *testing.T) {
+    // 投入 fixture: pre_tool_use_bash_dangerous.json (T-001 を確実発火)
+    // 反復: N=1000 行を 100 events/sec で append（10 秒間）
+    // 計測区間: 行 append 時刻 (t0) → Falco alert stdout 観測時刻 (t1)
+    //   t0 = events.jsonl への WriteString 直前の time.Now()
+    //   t1 = stdout から `[CLAUDE_CODE CRITICAL] Dangerous Bash Command` を含む行が読めた時刻
+    // 各サンプルの latency = t1 - t0 を集計
+    // p95 を sort して算出（latencies[int(0.95 * len(latencies))]）
+
+    // 合格基準:
+    //   p95 ≤ 5000ms（最低条件、§8.2 SLO）
+    //   目標: p95 ≤ 1000ms
+
+    // 環境前提: macOS arm64 / Linux amd64 のいずれか、Falco process は事前起動
+}
+```
+
+CI では合格基準を **最低条件 p95 ≤ 5s** とし、目標値（p95 ≤ 1s）は本番環境向け SLO 監視（OPS-002 / OPS-003）で測る。
 
 ---
 
@@ -1112,7 +1382,52 @@ falco-plugin-dev-kit の Phase 0〜6 に沿って進める。ただし Claude Co
 | B-004 | release asset 名に OS/arch を含める。 |
 | B-005 | GitHub Actions matrix で Linux/macOS を分ける。 |
 | B-006 | GLIBC互換性を確認する。 |
-| B-007 | checksum を必ず生成する。 |
+| B-007 | checksum を必ず生成する。コマンド例: Linux は `sha256sum lib*.so > checksums.sha256`、macOS は `shasum -a 256 lib*.dylib > checksums.sha256`。release.yml の matrix で OS を分岐し最後に `cat` で 1 ファイルに統合。検証側は `sha256sum -c checksums.sha256` (Linux) / `shasum -a 256 -c checksums.sha256` (macOS)。 |
+
+### 21.3 Supply chain 対応（SBOM / 署名）
+
+監視ツール自体が改ざんされると検知が無効化されるため、release artifact の出所と完全性を担保する。
+
+| ID | 要件 | v0.1 | v0.2 以降 |
+|---|---|---|---|
+| SC-001 | SHA-256 checksum (`checksums.sha256`) | **必須** | 維持 |
+| SC-002 | SBOM 生成（CycloneDX JSON または SPDX） | 推奨（Syft / `go-licenses` で自動生成可） | 必須 |
+| SC-003 | artifact 署名（cosign keyless / Sigstore） | 推奨（GitHub Actions OIDC で keyless 署名） | 必須 |
+| SC-004 | Provenance（SLSA Build L1 以上） | 任意 | 必須（SLSA L3 を目標） |
+| SC-005 | dependencies 脆弱性スキャン（govulncheck, trivy fs） | CI に組み込む | 維持 |
+| SC-006 | hook logger と plugin 双方の署名・検証手順を README に記載 | 推奨 | 必須 |
+
+> v0.1 では checksum を必須、SBOM / cosign 署名は推奨。v0.2 で SBOM と cosign 署名を必須化し、v0.6〜v1.0 で SLSA Provenance L3 / Plugin Registry 登録を目指す。
+
+#### 21.3.1 v0.1 で先行導入する最小実装例
+
+**SBOM 生成（推奨、release.yml に組み込み可能）**:
+```yaml
+- name: Generate SBOM
+  uses: anchore/sbom-action@v0
+  with:
+    path: .
+    format: cyclonedx-json
+    output-file: sbom.cdx.json
+    artifact-name: claude-code-plugin-sbom
+```
+ローカルで生成する場合: `syft scan dir:. -o cyclonedx-json=sbom.cdx.json`
+
+**cosign keyless 署名（推奨）**:
+```yaml
+permissions:
+  id-token: write   # OIDC for keyless signing
+  contents: write
+steps:
+  - uses: sigstore/cosign-installer@v3
+  - name: Sign artifact
+    run: |
+      cosign sign-blob --yes lib${{ env.PLUGIN_NAME }}-plugin-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.ext }} \
+        --output-signature lib${{ env.PLUGIN_NAME }}-plugin-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.ext }}.sig \
+        --output-certificate lib${{ env.PLUGIN_NAME }}-plugin-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.ext }}.crt
+```
+
+ユーザ側の検証: `cosign verify-blob --certificate <cert> --signature <sig> <binary>`
 
 ---
 
@@ -1120,7 +1435,22 @@ falco-plugin-dev-kit の Phase 0〜6 に沿って進める。ただし Claude Co
 
 ### 22.1 個人macOS導入
 
+> **前提**: `claude-code-security-logger` は本プロジェクトで新規実装するバイナリ（要件 §6.1）であり、dev-kit scaffold には含まれない。Phase 1 で `cmd/claude-code-security-logger/` ディレクトリを手動で作成し、Phase 2 で実装、Phase 5 でビルド・配布する。下記手順 1 の `claude-code-security-logger-darwin-arm64` は本プロジェクトの release artifact（§21.1）として配布されるバイナリを指す。
+
 ```bash
+# 0. download release artifacts (logger / plugin / falco-local.yaml / rules / checksums)
+RELEASE=https://github.com/takaosgb3/falco-plugin-claude_code/releases/download/v0.1.0
+mkdir -p ~/.local/share/claude-code-falco && cd ~/.local/share/claude-code-falco
+for f in claude-code-security-logger-darwin-arm64 \
+         libclaude-code-plugin-darwin-arm64.dylib \
+         falco-local.yaml \
+         claude_code_rules.yaml \
+         claude_code_health.yaml \
+         checksums.sha256; do
+  curl -fLO "$RELEASE/$f"
+done
+shasum -a 256 -c checksums.sha256   # 完全性検証
+
 # 1. install logger
 install -m 0755 claude-code-security-logger-darwin-arm64 ~/.local/bin/claude-code-security-logger
 
@@ -1131,9 +1461,54 @@ touch ~/.claude/security/events.jsonl
 chmod 600 ~/.claude/security/events.jsonl
 
 # 3. configure hooks in ~/.claude/settings.json or .claude/settings.local.json
-# 4. run Falco local
+# 4. run Falco local（カレントの falco-local.yaml と rules/ を読む）
+cd ~/.local/share/claude-code-falco
 falco -c falco-local.yaml --disable-source syscall -U
 ```
+
+### 22.1.1 Linux production 導入
+
+```bash
+# 0. download release artifacts
+RELEASE=https://github.com/takaosgb3/falco-plugin-claude_code/releases/download/v0.1.0
+sudo mkdir -p /opt/claude-code-falco && cd /opt/claude-code-falco
+for f in claude-code-security-logger-linux-amd64 \
+         libclaude-code-plugin-linux-amd64.so \
+         falco.yaml \
+         claude_code_rules.yaml \
+         claude_code_health.yaml \
+         checksums.sha256; do
+  sudo curl -fLO "$RELEASE/$f"
+done
+sudo sha256sum -c checksums.sha256
+
+# 1. install logger（system-wide）
+sudo install -m 0755 claude-code-security-logger-linux-amd64 /usr/local/bin/claude-code-security-logger
+
+# 2. install plugin（Falco 既定パス）
+sudo install -m 0644 libclaude-code-plugin-linux-amd64.so /usr/share/falco/plugins/
+
+# 3. install rules
+sudo install -m 0644 -d /etc/falco/rules.d
+sudo install -m 0644 claude_code_rules.yaml claude_code_health.yaml /etc/falco/rules.d/
+
+# 4. install Falco config
+sudo install -m 0644 falco.yaml /etc/falco/falco.yaml.d/claude_code.yaml
+# /etc/falco/falco.yaml には plugins / load_plugins / rules_files の参照を追記
+
+# 5. prepare per-user log directory（developer ごと）
+mkdir -p ~/.claude/security && chmod 700 ~/.claude/security
+touch ~/.claude/security/events.jsonl && chmod 600 ~/.claude/security/events.jsonl
+
+# 6. configure hooks（user / project settings）
+# ~/.claude/settings.json に hooks ブロックを追加（§6.1.3 の例参照）
+
+# 7. enable Falco service
+sudo systemctl enable --now falco
+sudo journalctl -u falco -f   # alert を確認
+```
+
+> **systemd 注意**: Falco の rules_files に `/etc/falco/rules.d/claude_code_rules.yaml` と `/etc/falco/rules.d/claude_code_health.yaml` の **両方を個別パスで列挙**する（P007）。`/etc/falco/rules.d/*.yaml` のような glob 指定では既存の Falco rules と順序が崩れる場合がある。
 
 ### 22.2 チーム導入
 
@@ -1154,6 +1529,28 @@ falco -c falco-local.yaml --disable-source syscall -U
 | SIEM | Falco alerts と OTel logs を集約。 |
 | Retention | local短期、centralは監査要件に従う。 |
 | Privacy | prompt/tool content収集は明示ポリシーとredaction前提。 |
+
+### 22.4 Health check / 監視戦略
+
+監視ツール自体の sanity check を v0.1 で必ず提供する。
+
+| ID | 要件 |
+|---|---|
+| OPS-001 | Hook logger に `--selftest` モードを実装し、stdin 固定 fixture → 出力 JSONL を検証できる。CI / オンボーディング手順で利用する。 |
+| OPS-002 | Hook logger は処理件数 / redaction 件数 / write error / drop 件数を期間集計し、`logger_stats.jsonl` などに 1 分粒度で書き出す（任意機能、v0.1 では推奨）。 |
+| OPS-003 | Falco plugin は §6.3 FP-011 の counter を `claude_code.dropped` 等の field か、`falco --dry-run` / Prometheus 互換 metrics で観測可能にする。v0.1 は logging（debug 出力）で代用可。 |
+| OPS-004 | **Self-check rule**: `events.jsonl` に最近 N 分（既定 15 分）書き込みが無い場合に WARNING を出すルールを rule pack に同梱する。logger 停止 / hooks 無効化を運用側で気付くため。<br>**運用注意**: idle 中の Claude Code（ユーザーが PC から離れている状態）でも N 分閾値を超え得る。`SessionEnd` を hook で受信した直後はタイマーをリセットする、または rule の閾値を業務時間帯のみに適用する設定を README に記載する。<br>**配置先**: 通常検出ルール（`rules/claude_code_rules.yaml`）とは別ファイル `rules/claude_code_health.yaml` に切り出す。Falco の `rules_files` には両方を個別パスで列挙する（P007）。理由: self-check は時刻ベースで通常 condition と性質が異なり、誤って削除/無効化されにくくするため。 |
+| OPS-005 | `events.jsonl` の `tail -n 1` で最後の `received_at` を取得する CLI（`claude-code-security-logger doctor`）を v0.1 で提供。<br>**exit code 仕様**: `0` = 最後の受信が閾値内（既定 15 分）、`1` = events.jsonl は存在するが空、`2` = events.jsonl が存在しない/読めない、`3` = 最後の受信が閾値超過。任意の閾値は `--max-age <duration>` で上書きできる。<br>**duration 形式**: Go `time.ParseDuration` 互換（例: `--max-age 15m`, `--max-age 1h30m`, `--max-age 30s`）。整数だけの指定（`--max-age 900`）は受け付けず、必ず単位（`s/m/h`）を付けて検証時のエラーを防ぐ。 |
+| OPS-006 | hook logger / Falco の死活は OS のサービスマネージャ（macOS launchd, Linux systemd）に任せる。プラグインから OS サービスを起動・監視はしない（責務分離）。 |
+
+### 22.5 Container / Kubernetes での扱い
+
+| 観点 | v0.1 方針 |
+|---|---|
+| 監視対象 | Claude Code は CLI / IDE で developer workstation 実行が主であり、container / k8s pod 内での Claude Code 監視は v0.1 では非対象。 |
+| Falco の実行形態 | Falco を k8s DaemonSet で運用している組織でも、本プラグインは `~/.claude/security/events.jsonl` の host-level tail を前提とする。pod 側に hook logger を入れても events.jsonl をどう node に共有するかは未保証。 |
+| 検討事項 | container 内 Claude Code を監視する場合は、(a) container volume で events.jsonl を host にマウント、(b) sidecar として hook logger を動かす、のいずれかが必要。これらは v0.3 以降で具体化する。 |
+| 影響 | §21 の release artifact は host バイナリ（macOS `.dylib` / Linux `.so`）であり、container image 配布は v0.4 以降のロードマップで検討する。 |
 
 ---
 
@@ -1202,7 +1599,7 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 | Hook logger | Go binary、stdin JSON → redacted JSONL |
 | Events | SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, PostToolBatch, PermissionDenied, ConfigChange, FileChanged |
 | Plugin | JSONL tail source plugin + field extraction |
-| Rules | 10+ rules。Dangerous Bash、Secret Exfiltration、Permission Bypass、Settings/MCP change は必須 |
+| Rules | **最低 10 ルール、目標 18 ルール（§29 付録 B の T-001〜T-018 全網羅）**。Dangerous Bash (T-001)、Secret Exfiltration (T-002)、Permission Bypass (T-003)、Settings/Hook 変更 (T-005/T-006)、MCP 変更 (T-007) は必須 |
 | macOS | `.dylib`, `falco-local.yaml`, local run手順 |
 | Linux | `.so`, `falco.yaml`, CI build |
 | OTel | native OTel correlation guidance + filelog example。plugin内OTLPなし |
@@ -1215,12 +1612,12 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 
 | Version | 候補 |
 |---|---|
-| v0.2 | optional prevention hook policy、ConfigChange block、managed settings deployment guide |
-| v0.3 | local sidecar / Unix domain socket input、higher throughput、health endpoint |
-| v0.4 | OTel/SIEM correlation dashboards、Falcosidekick integration recipes |
-| v0.5 | Claude Code plugin bundle配布、marketplace対応、hook logger自動設定 |
-| v0.6 | risk scoring tuning、organization policy packs、allowlist management |
-| v1.0 | Plugin Registry登録、安定schema、運用実績、包括的E2E |
+| v0.2 | optional prevention hook policy、ConfigChange block、managed settings deployment guide、**SBOM / cosign 署名の必須化（§21.3 SC-002/SC-003）** |
+| v0.3 | local sidecar / Unix domain socket input、higher throughput、health endpoint、**container 内 Claude Code 監視（events.jsonl の host 共有 or sidecar 方式の検討、§22.5）** |
+| v0.4 | OTel/SIEM correlation dashboards、Falcosidekick integration recipes、**Falco DaemonSet (Kubernetes) 統合パターン**、container image 配布の検討 |
+| v0.5 | Claude Code plugin bundle 配布、marketplace 対応、hook logger 自動設定 |
+| v0.6 | risk scoring tuning、organization policy packs、allowlist management、**SLSA Provenance L3 への到達（§21.3 SC-004）** |
+| v1.0 | Plugin Registry 登録、安定 schema、運用実績、包括的 E2E |
 
 ---
 
@@ -1247,15 +1644,19 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 
 ## 27. 実装時の初期値
 
+### 27.1 プラグイン基本値
+
 | 項目 | 初期値 |
 |---|---|
 | Repository | `falco-plugin-claude-code` |
 | Plugin name | `claude-code` |
 | Event source | `claude_code` |
 | Field prefix | `claude_code.*` |
-| Plugin ID | `999` for development |
+| Plugin ID | `999` for development（注: 公開前に Falco Plugin Registry で正式 ID を取得する。Registry で予約済みの場合は別の暫定値を選ぶ） |
 | Version | `0.1.0` |
-| Logger binary | `claude-code-security-logger` |
+| License | Apache-2.0 |
+| Author | `takaosgb3`（GitHub username、Go module path 用に確定）。`FALCOYA` は OSS organization 表記として README / LICENSE クレジット用に併記 |
+| Logger binary | `claude-code-security-logger`（本プロジェクトで新規実装、§6.1） |
 | Default log path | `~/.claude/security/events.jsonl` |
 | Log format | normalized JSONL |
 | Start position | `end` |
@@ -1268,9 +1669,51 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 | Redaction | enabled by default |
 | Raw payload | disabled by default |
 
+### 27.2 ツールチェーンとプラットフォーム要件
+
+| 項目 | 初期値 |
+|---|---|
+| Plugin SDK | `github.com/falcosecurity/plugin-sdk-go` `v0.8.1`（minor は維持しつつ patch 追従。SDK のメジャー昇格時は major version bump として扱う） |
+| Go 最小バージョン | 1.22 以上（plugin-sdk-go v0.8 の要件に合わせる） |
+| Falco 最小バージョン | 0.38 以上（plugin API v3、`required_plugin_versions` 対応） |
+| macOS 最低サポート | macOS 13 (Ventura) 以上、Apple Silicon (arm64) を主、Intel (amd64) は best-effort |
+| Linux 最低サポート | glibc 2.31 以上（Ubuntu 20.04 / Debian 11 / RHEL 9 相当）。CI で確認する |
+| ビルドフラグ | `CGO_ENABLED=1` + `-buildmode=c-shared`（P002 必須） |
+| アーキテクチャ | linux/amd64, linux/arm64, darwin/arm64（darwin/amd64 は best-effort） |
+
+### 27.3 scaffold 入力ワークシート（dev-kit `/plugin-scaffold claude-code json` 起動時の対話入力一覧）
+
+`/plugin-scaffold claude-code json` を起動したときに対話で聞かれる項目と、本要件における回答セット。実装時はこの表を上から順に答える。
+
+| 順序 | プロンプト項目 | 回答（このプラグインでの値） | 出典 |
+|---:|---|---|---|
+| 1 | プラグイン名（小文字） | `claude-code` | §27.1 |
+| 2 | プラグイン名（大文字） | `CLAUDE_CODE` | §27.1（自動生成） |
+| 3 | プラグイン名（CamelCase） | `ClaudeCode` | §27.1（自動生成） |
+| 4 | Plugin ID | `999`（dev 用、リリース前に Registry で正式取得） | §6.3 FP-003, §27.1 |
+| 5 | Event source | `claude_code` | §27.1 |
+| 6 | Field prefix | `claude_code.*` | §27.1 |
+| 7 | Version | `0.1.0` | §27.1 |
+| 8 | License | `Apache-2.0` | §27.1 |
+| 9 | Author（GitHub username, Go module path 用） | `takaosgb3` | §27.1（RH1-04 で確定） |
+| 10 | Organization 表記（README クレジット用） | `FALCOYA` | §27.1 |
+| 11 | Plugin description | `Claude Code Hook event monitoring plugin for Falco` | §0, §22 |
+| 12 | LogPath（既定） | `~/.claude/security/events.jsonl` | §6.2 ES-001 |
+| 13 | LogFormat | `json` | §10 |
+| 14 | TimeFormat（RFC3339） | `2006-01-02T15:04:05Z07:00` | §10.1, §27.1 |
+| 15 | Plugin SDK バージョン | `v0.8.1` | §27.2 |
+| 16 | Go 最小バージョン | `1.22` | §27.2 |
+| 17 | Falco 最小バージョン | `0.38` | §27.2 |
+| 18 | LogSource（CLAUDE.md / README で監視対象を表示） | `Claude Code Hooks (normalized JSONL via claude-code-security-logger)` | §6.1 |
+| 19 | ドメイン固有フィールド一覧（`${DOMAIN_FIELDS_*}` 用） | §10.2 の `claude_code.*` 全フィールド表をそのまま投入 | §10.2 |
+
+> **補足**: 項目 19 で投入するフィールドは §10.2 の表（`claude_code.schema_version` 〜 `claude_code.raw_excerpt` の全 28 項目）を JSON / YAML / CSV のどれかで scaffold スキルに渡す。スキル側のフォーマットに従うこと。詳細は dev-kit `.claude/skills/plugin-scaffold/SKILL.md` を参照。
+
 ---
 
 ## 28. 付録A: Hook event coverage matrix
+
+> 下表の hook event 名は Claude Code 公式仕様に依存する。`UserPromptExpansion` / `PostToolBatch` / `Elicitation` / `Result` / `WorktreeCreate` / `WorktreeRemove` などはバージョンによって追加・改名・廃止される可能性があるため、リリース前に `https://code.claude.com/docs/en/hooks` の最新版を確認し、fixtures と差分テストを行う。本要件で「必須」と分類した event でも、Claude Code 側で当該 hook が利用不可になった場合は実装上 fallback（OTel / 上位 event 観測）にダウングレードする。
 
 | Event | v0.1 | 主な用途 | 備考 |
 |---|---:|---|---|
@@ -1296,6 +1739,8 @@ v0.1 では、以下に絞って「動く・検知できる・安全に配布で
 
 ## 29. 付録B: Minimal Falco rule pack構成
 
+下記は v0.1 MVP rule pack の想定構成である。§12.1 で定義した T-001〜T-018 すべてに対応するルールを含む。実装フェーズで benign coverage と false positive 評価を踏まえて優先順位や条件をチューニングする。
+
 ```text
 rules/
 └── claude_code_rules.yaml
@@ -1306,27 +1751,37 @@ rules/
     │   ├── claude_code_secret_patterns
     │   ├── claude_code_external_transfer_tools
     │   ├── claude_code_settings_paths
-    │   └── claude_code_mcp_paths
+    │   ├── claude_code_mcp_paths
+    │   ├── claude_code_skill_paths
+    │   ├── claude_code_agent_paths
+    │   └── claude_code_trusted_domains
     ├── macros
     │   ├── claude_code_is_bash
     │   ├── claude_code_is_tool_preflight
     │   ├── claude_code_is_settings_change
     │   ├── claude_code_is_mcp_tool
+    │   ├── claude_code_is_subagent
+    │   ├── claude_code_is_external_fetch
     │   └── claude_code_has_high_risk_score
     └── rules
-        ├── Dangerous Bash Command
-        ├── Secret Exfiltration Attempt
-        ├── Permission Bypass Mode
-        ├── Suspicious Permission Update
-        ├── Hook Disabled Or Modified
-        ├── Claude Settings Modified
-        ├── MCP Config Changed
-        ├── Suspicious MCP Tool Use
-        ├── Sensitive File Read
-        ├── Workspace Escape
-        ├── Destructive Git Operation
-        ├── Prompt Injection Pattern
-        └── Agent Runaway Tool Storm
+        ├── Dangerous Bash Command                  # T-001
+        ├── Secret Exfiltration Attempt             # T-002
+        ├── Permission Bypass Mode                  # T-003
+        ├── Suspicious Permission Update            # T-004
+        ├── Claude Settings Modified                # T-005
+        ├── Hook Disabled Or Modified               # T-006
+        ├── MCP Config Changed                      # T-007
+        ├── Suspicious MCP Tool Use                 # T-008
+        ├── Sensitive File Read                     # T-009
+        ├── Workspace Escape                        # T-010
+        ├── Destructive Git Operation               # T-011
+        ├── Prompt Injection Pattern                # T-012
+        ├── Agent Subagent Risk                     # T-013
+        ├── Agent Runaway Tool Storm                # T-014
+        ├── External Fetch With Sensitive Context   # T-015
+        ├── Config Policy Downgrade                 # T-016
+        ├── Skill Or Command Shell Execution Risk   # T-017
+        └── Channel Or MCP Push Risk                # T-018
 ```
 
 ---
@@ -1341,6 +1796,8 @@ rules/
 
 > OpenTelemetry integration is supported for observability and correlation, but it is not the primary low-latency detection path in v0.1.
 
+> **注記（v0.2 以降）**: §21.3 で v0.2 から SBOM / cosign 署名が必須化されるため、README には artifact の検証コマンド（`cosign verify-blob ...` / `sha256sum -c checksums.sha256` / SBOM 添付物の確認）の手順も追加する。v0.1 の README には少なくとも `sha256sum -c` を案内する。
+
 ---
 
 ## 31. 付録D: 作業中コンテキスト保持メモ
@@ -1350,17 +1807,24 @@ rules/
 1. **最重要設計**: Hook logger → JSONL → Falco source plugin。
 2. **`events.jsonl` は標準出力ではない**: hook logger が作る。
 3. **macOS は主対象**: `.dylib`, `falco-local.yaml`, `--disable-source syscall`, `-U`。
-4. **OpenTelemetryは主入力ではない**: 相関・中央集約・可観測性。
-5. **Falco rules**: `source: claude_code` 必須、`evt.type` 不使用。
-6. **Privacy first**: raw prompt/tool_responseを保存しない。
-7. **Detect vs Prevent**: Falcoは検知、Hook policyはブロック。
+4. **OpenTelemetry は主入力ではない**: 相関・中央集約・可観測性。
+5. **Falco rules**: `source: claude_code` 必須、`evt.type` 不使用、boolean field は `"true"`/`"false"` リテラル比較（§13 R-011）。
+6. **Privacy first**: raw prompt/tool_response を保存しない。
+7. **Detect vs Prevent**: Falco は検知、Hook policy はブロック。
 8. **dev-kit Phase 0〜6**: scaffold/parser/rules/test/build/report。
-9. **P001〜P021回避**: `.dylib/.so`, `-buildmode=c-shared`, nil map, SeekEnd, fsnotify timing等。
-10. **正式Plugin ID**: 開発は999、公開前にRegistry。
+9. **P001〜P021 回避**: `.dylib/.so`, `-buildmode=c-shared`, nil map, SeekEnd, fsnotify timing 等。詳細は §18.4 PROBLEM_PATTERNS マッピング表を参照。
+10. **正式 Plugin ID**: 開発は 999、公開前に Falco Plugin Registry で正式 ID 取得。
+11. **Redaction patterns**: 最低 §17.1 のセットを実装（AWS / GCP / Slack / GitHub PAT / OAuth / JWT / RSA / `.env` / Cookie）。
+12. **Supply chain**: v0.1 で SHA-256 checksum 必須、SBOM / cosign 署名は推奨 → v0.2 必須化（§21.3）。
+13. **Health check**: doctor CLI / self-check rule / counter exposure を v0.1 で揃える（§22.4 OPS-001〜OPS-006）。
+14. **Container / k8s**: v0.1 は host-level tail のみ。container Claude Code 監視は v0.3 以降（§22.5）。
+15. **OpenClaw**: 流用してよいのは I/O 骨格のみ。schema / permission / MCP / Hook 概念は新設（§3.3.1）。
 
 ---
 
 ## 32. 最終判断
+
+> **本章の位置付け**: §0 が「v3 で確定した個別判断」を表で示すサマリ、§1 が「全体像と図」を散文と図で示す要約、本 §32 は「v0.1 の実行計画」を箇条書きで提示する。三者は同じ事実の異なる切り口であり、§32 を読めば次に何をやるかが直接導けるようにしている。
 
 Claude Code 用 Falco plugin として最も適切なアーキテクチャは、**Claude Code Hook JSONL Source Plugin** である。
 
