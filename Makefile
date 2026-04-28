@@ -28,7 +28,7 @@ else
   endif
 endif
 
-.PHONY: build build-release build-logger test lint clean verify package vet e2e-pattern e2e-pipeline e2e validate-rules
+.PHONY: build build-release build-logger test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules
 
 # P002: -buildmode=c-shared is REQUIRED (without it, Falco cannot load the plugin)
 build:
@@ -113,3 +113,12 @@ e2e-pipeline:
 
 # Level 1 + Level 2 combined (CI fast path, no Falco needed)
 e2e: e2e-pattern e2e-pipeline
+
+# Level 3: Falco-in-the-loop integration tests (requires ~/bin/falco and the
+# built .dylib; run `make build` first). Skipped automatically when falco is
+# not installed.
+e2e-l3:
+	go test ./test/integration/ -v -count=1 -timeout 120s
+
+# All E2E layers: L1 + L2 + L3 (longest, ~30s on macOS arm64).
+e2e-all: e2e e2e-l3

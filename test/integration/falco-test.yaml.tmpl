@@ -1,0 +1,35 @@
+# Falco Level 3 integration-test config template (Phase 4 / §20.3 TEST-006..008)
+#
+# This is consumed by test/integration/helpers.go:writeFalcoConfig. The Go
+# helper substitutes the placeholders below to produce a per-test config under
+# the test's tempdir. The resulting file uses ABSOLUTE paths so it works no
+# matter what cwd Falco is launched from (avoids the relative-path resolution
+# trap of falco-local.yaml).
+#
+# Placeholders (matched literally, case-sensitive):
+#   __PLUGIN_PATH__   — absolute path to libclaude-code-plugin-darwin-arm64.dylib
+#   __EVENTS_PATH__   — absolute path to the JSONL file under test
+#   __RULES_PATH__    — absolute path to rules/claude-code_rules.yaml
+#   __HEALTH_PATH__   — absolute path to rules/claude_code_health.yaml
+#
+# Important:
+#   - start_at: "beginning" is REQUIRED. The plugin defaults to SeekEnd (P014)
+#     and will skip the fixture lines that we wrote *before* launching Falco.
+#   - load_plugins: [claude-code] is REQUIRED (P008).
+#   - On macOS we omit the outputs: section (P017) and pass `-U` on the CLI
+#     to disable Falco userspace driver checks (P018).
+
+plugins:
+  - name: claude-code
+    library_path: __PLUGIN_PATH__
+    init_config: |
+      {"log_paths": ["__EVENTS_PATH__"], "start_at": "beginning"}
+
+load_plugins: [claude-code]
+
+rules_files:
+  - __RULES_PATH__
+  - __HEALTH_PATH__
+
+stdout_output:
+  enabled: true
