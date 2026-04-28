@@ -27,6 +27,12 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Validate Rules (Falco-free static check)
+        # Phase 6: protect against rule regressions in CI even on runners
+        # without a Falco binary. tools/rule-validator runs P003/P005 source
+        # checks plus YAML schema and macro/list resolution.
+        run: make validate-rules
+
       - name: Level 1 - Pattern Coverage Tests
         run: make e2e-pattern
 

@@ -1,10 +1,23 @@
 # falco-plugin-claude-code
 
-A [Falco](https://falco.org/) source plugin that monitors **Claude Code** Hook events
-and detects security-relevant behaviour from AI coding agents in real time.
+A [Falco](https://falco.org/) source plugin that monitors **Claude Code** Hook
+events and detects security-relevant behaviour from AI coding agents in real
+time.
 
-> Status: v0.1.0 (Phase 1 scaffold). Parser, rules and tests are completed in
-> subsequent phases per [`docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md`](docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md).
+| Property | Value |
+|---|---|
+| Status | **v0.1.0** (release candidate — Phase 6 docs) |
+| Plugin name | `claude-code` |
+| Event source | `claude_code` |
+| Field prefix | `claude_code.*` (37 fields, see [§10.2](docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md#102)) |
+| Detection rules | 19 (T-001 .. T-018) + 4 health rules |
+| Falco | 0.38+ (plugin API v3) — verified on 0.43.1 |
+| Platforms | macOS arm64 (primary) / Linux amd64 |
+| License | Apache-2.0 |
+| Author | takaosgb3 / [FALCOYA](https://github.com/takaosgb3) |
+
+> See [`docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md`](docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md)
+> for the canonical requirements (§1..§32, AT-1..AT-5, ET-1..ET-7).
 
 ## Important context
 
@@ -13,22 +26,23 @@ and detects security-relevant behaviour from AI coding agents in real time.
 > configure as a Claude Code hook handler (this repo ships both the logger and
 > the Falco plugin).
 
-> The Falco plugin is **detect-first**. It emits alerts for Claude Code security
-> events. Blocking tool execution should be implemented separately using
-> Claude Code `PreToolUse`, `PermissionRequest`, or `ConfigChange` policy hooks.
+> The Falco plugin is **detect-first**. It emits alerts for Claude Code
+> security events. Blocking tool execution should be implemented separately
+> using Claude Code `PreToolUse`, `PermissionRequest`, or `ConfigChange`
+> policy hooks (§15).
 
-> OpenTelemetry integration is supported for observability and correlation, but
-> it is not the primary low-latency detection path in v0.1.
+> OpenTelemetry integration is supported for observability and correlation,
+> but it is not the primary low-latency detection path in v0.1 (§9).
 
 ## Architecture
 
 ```
 Claude Code Hook
-   -> claude-code-security-logger     (this repo: cmd/claude-code-security-logger)
+   -> claude-code-security-logger     (cmd/claude-code-security-logger)
    -> ~/.claude/security/events.jsonl (normalized JSONL, redacted)
-   -> Falco source plugin: claude-code (this repo: cmd/plugin-sdk)
+   -> Falco source plugin: claude-code (cmd/plugin-sdk)
    -> Falco rules (source: claude_code)
-   -> alert
+   -> alert (stdout / SIEM / SOAR)
 ```
 
 ## Components
@@ -36,25 +50,104 @@ Claude Code Hook
 | Component | Path | Description |
 |-----------|------|-------------|
 | Falco source plugin | `cmd/plugin-sdk/` | Tails `events.jsonl`, exposes `claude_code.*` fields. Built as `.so` (Linux) / `.dylib` (macOS). |
-| Hook logger | `cmd/claude-code-security-logger/` | Reads Claude Code hook stdin JSON, redacts secrets, appends to JSONL. |
+| Hook logger | `cmd/claude-code-security-logger/` | Reads Claude Code hook stdin JSON, redacts secrets (§17.1), appends to JSONL. |
+| Operator CLI | `cmd/claude-code-doctor/` | OPS-001..OPS-006 diagnostics (§22.4). |
 | Parser | `pkg/parser/` | JSONL → `LogEntry` mapping for the `claude_code_security_event/v1` schema. |
-| Rules | `rules/claude-code_rules.yaml` | T-001..T-018 detection rules (source: `claude_code`). |
+| Rules | `rules/claude-code_rules.yaml` + `rules/claude_code_health.yaml` | 19 detection + 4 health rules (source: `claude_code`). |
 | Configs | `falco.yaml` / `falco-local.yaml` / `falco-docker.yaml` | Linux production / macOS local / container deployments. |
+
+## Quick start
+
+### macOS (developer workstation)
+
+```bash
+# 1. Build plugin + logger + doctor (auto-detects darwin/arm64)
+make build-all
+
+# 2. Prepare the hook log directory
+mkdir -p ~/.claude/security && chmod 700 ~/.claude/security
+touch ~/.claude/security/events.jsonl && chmod 600 ~/.claude/security/events.jsonl
+
+# 3. Run Falco against the local config (P018 — `-U`).
+#    Note: falco-local.yaml uses a relative library_path; run from the repo root.
+~/bin/falco -c falco-local.yaml --disable-source syscall -U
+
+# 4. Health check
+./claude-code-doctor-darwin-arm64 env
+./claude-code-doctor-darwin-arm64 tail-position --max-age 15m ~/.claude/security/events.jsonl
+```
+
+Full step-by-step instructions: [docs/installation.md](docs/installation.md).
+
+### Linux (production / managed deployment)
+
+```bash
+# 1. Install Falco (>=0.38 — plugin API v3)
+curl -fsSL https://falco.org/repo/falcosecurity-packages.asc | sudo gpg --dearmor -o /etc/apt/keyrings/falco-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/falco-archive-keyring.gpg] https://download.falco.org/packages/deb stable main" | sudo tee /etc/apt/sources.list.d/falcosecurity.list
+sudo apt update && sudo apt install -y falco
+
+# 2. Install plugin + rules + config (download from a v0.1.0 GitHub Release)
+RELEASE=https://github.com/takaosgb3/falco-plugin-claude_code/releases/download/v0.1.0
+curl -fLO "$RELEASE/libclaude-code-plugin-linux-amd64.so"
+sudo install -m 0644 libclaude-code-plugin-linux-amd64.so /usr/share/falco/plugins/
+
+# 3. Start Falco
+sudo systemctl enable --now falco
+sudo journalctl -u falco -f
+```
+
+Full step-by-step instructions: [docs/installation.md](docs/installation.md#linux-production-install).
+
+## Detection coverage (T-001 .. T-018)
+
+Per §12 of the requirements. Severity levels: **CRITICAL** (priority 0–1) /
+**WARNING** (priority 4) / **NOTICE** (priority 5).
+
+| ID | Threat | Severity | Hook events | Detection trigger |
+|---|---|---|---|---|
+| T-001 | Dangerous Bash Command | CRITICAL | PreToolUse / PermissionRequest | `rm -rf /`, `dd if=`, `mkfs`, `chmod 777`, `curl|sh`, reverse shell |
+| T-002 | Secret Exfiltration Attempt | CRITICAL | Bash / WebFetch / Read / PostToolBatch | `.env`, `id_rsa`, AWS keys + `curl`/`scp`/`nc`/`pbcopy` |
+| T-003 | Permission Bypass Mode | CRITICAL | settings / permission_mode / OTel | `bypassPermissions`, `--dangerously-skip-permissions` |
+| T-004 | Suspicious Permission Update | WARNING | PermissionRequest | `updatedPermissions` to `userSettings` / `projectSettings` (allow rule added) |
+| T-005 | Claude Settings Modified | WARNING | ConfigChange / FileChanged | `~/.claude/settings.json`, `.claude/settings.local.json` modified |
+| T-006 | Hook Disabled Or Modified | CRITICAL | ConfigChange / FileChanged | `disableAllHooks`, hooks block deletion, logger path changed |
+| T-007 | MCP Config Changed | WARNING | ConfigChange / FileChanged | `.mcp.json`, `~/.claude.json`, `managed-mcp.json` changed |
+| T-008 | Suspicious MCP Tool Use | WARNING | Pre/PostToolUse | `mcp__*` tool with write/delete/admin/export operation |
+| T-009 | Sensitive File Read | WARNING | PreToolUse Read/Grep/Glob | `.env`, private key, `.git/config`, kubeconfig, cloud creds |
+| T-010 | Workspace Escape | WARNING | cwd / file_path / command | `../`, absolute path outside repo, `/etc`, `$HOME/.ssh` |
+| T-011 | Destructive Git Operation | WARNING | Bash | `git reset --hard`, `git clean -fdx`, force push, branch deletion |
+| T-012 | Prompt Injection Pattern | WARNING | UserPromptSubmit / WebFetch / MCP resource | "ignore previous instructions", "reveal system prompt" |
+| T-013 | Agent / Subagent Risk | NOTICE / WARNING | SubagentStart / TaskCreated / Agent tool | unknown agent, too many tasks, risky permissionMode |
+| T-014 | Agent Runaway / Tool Storm | NOTICE / WARNING | PostToolBatch / aggregate | tool_count ≥ 50, duration spikes, failure cascades |
+| T-015 | External Fetch With Sensitive Context | WARNING | WebFetch / WebSearch + sensitive evidence | secret-like prompt + external URL |
+| T-016 | Config Policy Downgrade | CRITICAL | ConfigChange / settings | `disableBypassPermissionsMode` lifted, deny rule deleted, sandbox off |
+| T-017 | Skill / Command Shell Execution Risk | WARNING | ConfigChange / skills | skill shell execution, commands/skills tampering |
+| T-018 | Channel / MCP Push Risk | NOTICE / WARNING | MCP / channel config | channel plugin allow, external push message session injection |
+
+Plus **4 health rules** in `rules/claude_code_health.yaml`:
+- `[CLAUDE_CODE HEALTH] Heartbeat Stale (no events for 15m)` — OPS-004
+- `[CLAUDE_CODE HEALTH] Logger Drop Counter` — counter exposure
+- `[CLAUDE_CODE HEALTH] Logger Write Error` — JSONL write failures
+- `[CLAUDE_CODE HEALTH] Plugin Backpressure (queue saturated)` — drop rate
 
 ## Build
 
 ```bash
-make build           # Auto-detects OS: .dylib on macOS arm64, .so on Linux
+make build           # Auto-detects OS/arch: .dylib on macOS, .so on Linux
 make build-release   # Stripped, trimpath
-make build-doctor    # Build the operator doctor CLI (OPS-001..OPS-006)
+make build-doctor    # Operator doctor CLI (OPS-001..OPS-006)
 make build-all       # plugin + logger + doctor
 make test            # go test ./... -v
 make e2e             # Level 1 (pattern) + Level 2 (pipeline) tests
+make e2e-l3          # Level 3 Falco-in-the-loop (requires ~/bin/falco)
 make verify          # Validate Mach-O / ELF shape (P001)
+make validate-rules  # Falco-free rule lint (tools/rule-validator)
 make package         # Release artifact bundle + checksums.sha256
 ```
 
-`-buildmode=c-shared` is mandatory (P002). The Makefile sets it on every build.
+`-buildmode=c-shared` is mandatory (P002). The Makefile sets it on every plugin
+build.
 
 ## Operator CLI: `claude-code-doctor`
 
@@ -67,7 +160,7 @@ claude-code-doctor env                                  # OPS-001 environment
 claude-code-doctor plugin-load --config falco.yaml      # OPS-002 plugin load
 claude-code-doctor rule-check  --config falco.yaml      # OPS-003 rule load
 claude-code-doctor self-check                            # OPS-004 health rule
-claude-code-doctor tail-position [path] --max-age 15m   # OPS-005 staleness
+claude-code-doctor tail-position --max-age 15m [path]   # OPS-005 staleness
 claude-code-doctor verify-signature <bin>                # OPS-006 cosign
 claude-code-doctor all --config falco.yaml               # env+load+rules+health
 ```
@@ -80,8 +173,13 @@ not installed → graceful), `3=STALE` (`tail-position` only).
 
 ## Verifying release artifacts
 
-v0.1.0 release artifacts are signed with `cosign` keyless OIDC (§27.4 SC-003)
-in addition to SHA-256 checksums (§27.4 SC-001) and CycloneDX SBOM (SC-002).
+v0.1.0 release artifacts ship with three integrity layers (§27.4):
+
+| Layer | Mechanism | Requirement ID |
+|---|---|---|
+| Checksums | SHA-256 over every artifact | SC-001 |
+| SBOM | CycloneDX JSON (anchore/sbom-action) | SC-002 |
+| Signatures | cosign keyless OIDC (GitHub Actions) | SC-003 |
 
 ```bash
 # 1. Verify checksums (mandatory):
@@ -102,6 +200,23 @@ claude-code-doctor verify-signature libclaude-code-plugin-linux-amd64.so
 # 3. Inspect the SBOM:
 jq '.metadata, .components | length' sbom.cdx.json
 ```
+
+## Performance
+
+End-to-end latency from a hook event being appended to `events.jsonl` until
+Falco emits an alert (Phase 4 / TEST-008, N=1000 events @ 100/sec, macOS arm64,
+M2 Pro):
+
+| Percentile | Measured | Target (§8.3) | Floor (§8.3) |
+|---|---|---|---|
+| p50 | 23 ms | — | — |
+| **p95** | **39 ms** | ≤ 1000 ms | ≤ 5000 ms |
+| p99 | 41 ms | — | — |
+| max | 50 ms | — | — |
+
+The p95 result is **25× better than the 1 s target** and **128× better than
+the 5 s floor**. Plugin-internal latency (NextBatch round-trip, no Falco)
+measured by `TestPipeline_LatencyBudget` is p95=3.2 ms / max=3.7 ms.
 
 ## Requirements (§27.2)
 
@@ -130,6 +245,15 @@ Examples:
 | `claude_code.risk_type` | string | T-001..T-018 (e.g. `dangerous_bash`) |
 | `claude_code.risk_score` | uint64 | 0..100 |
 | `claude_code.severity` | string | `critical` / `warning` / `notice` / `info` |
+
+## Documentation
+
+- **Requirements (canonical)**: [`docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md`](docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md)
+- **Detailed task plan (Phase 0..6)**: [`docs/tasks/detailed_task_definition.md`](docs/tasks/detailed_task_definition.md)
+- **Installation guide**: [`docs/installation.md`](docs/installation.md)
+- **Failure pattern catalogue (P001..P021)**: [`PROBLEM_PATTERNS.md`](PROBLEM_PATTERNS.md)
+- **Changelog**: [`CHANGELOG.md`](CHANGELOG.md)
+- **Release readiness (AT/ET checklist)**: [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md)
 
 ## License
 

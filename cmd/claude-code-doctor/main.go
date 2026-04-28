@@ -217,8 +217,10 @@ Subcommands:
   plugin-load            OPS-002: verify Falco can load the plugin (-L)
   rule-check             OPS-003: verify Falco can load the claude-code rules
   self-check             OPS-004: dry-run a heartbeat fixture and confirm fire
-  tail-position [path]   OPS-005: report tail position / staleness of events.jsonl
+  tail-position [flags] [path]
+                         OPS-005: report tail position / staleness of events.jsonl
                             --max-age <duration> (default 15m); valid units s/m/h
+                            (flags MUST precede the optional positional path)
   verify-signature [bin] OPS-006: cosign verify-blob a release artifact
                             --signature <path> --certificate <path>
   all                    run env + plugin-load + rule-check + self-check
