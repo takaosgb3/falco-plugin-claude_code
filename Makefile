@@ -28,7 +28,7 @@ else
   endif
 endif
 
-.PHONY: build build-release build-logger test lint clean verify package vet e2e-pattern e2e-pipeline e2e
+.PHONY: build build-release build-logger test lint clean verify package vet e2e-pattern e2e-pipeline e2e validate-rules
 
 # P002: -buildmode=c-shared is REQUIRED (without it, Falco cannot load the plugin)
 build:
@@ -78,18 +78,28 @@ package: build-release verify
 	shasum -a 256 $(BINARY) > checksums.sha256
 	shasum -a 256 $(LOGGER_BINARY) >> checksums.sha256
 	shasum -a 256 rules/$(PLUGIN_NAME)_rules.yaml >> checksums.sha256
+	shasum -a 256 rules/claude_code_health.yaml >> checksums.sha256
 	@echo ""
 	@echo "Release package ready:"
 	@echo "  - $(BINARY)"
 	@echo "  - $(LOGGER_BINARY)"
 	@echo "  - rules/$(PLUGIN_NAME)_rules.yaml"
+	@echo "  - rules/claude_code_health.yaml"
 	@echo "  - checksums.sha256"
 	@cat checksums.sha256
 
 install: verify
 	sudo cp $(BINARY) /usr/share/falco/plugins/$(BINARY)
 	sudo cp rules/$(PLUGIN_NAME)_rules.yaml /etc/falco/rules.d/
+	sudo cp rules/claude_code_health.yaml /etc/falco/rules.d/
 	@echo "Plugin installed"
+
+# --- Rule validation (Phase 3 quality gate) ---
+# Falco-free static validation of rules/*.yaml. Used in environments where
+# `falco -V` and yamllint are not available (macOS dev box, Linux CI without
+# Falco binary). See tools/rule-validator/main.go for the checks performed.
+validate-rules:
+	go run ./tools/rule-validator rules/$(PLUGIN_NAME)_rules.yaml rules/claude_code_health.yaml
 
 # --- E2E Test Targets ---
 

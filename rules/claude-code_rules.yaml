@@ -1,19 +1,163 @@
-# Falco Rules for claude-code plugin (Phase 1 scaffold)
+# Falco Rules for claude-code plugin (Phase 3 — T-001..T-018 full implementation)
 #
-# This file contains the T-001 reference rule from requirements v3 §12.3.
-# T-002..T-018 (§12.4) are added in Phase 3 by the plugin-rules SKILL.
+# Reference: requirements v3 §12 (threat categories), §13 (rule requirements),
+# §29 Appendix B (rule pack structure).
 #
 # Constraints (do NOT remove):
 #   - P003 / R-001: every rule MUST have `source: claude_code`
 #   - P005 / R-002: do NOT use `evt.type` in plugin rules
 #   - R-003     : `required_plugin_versions` must be at the top of the file
+#   - R-004     : reference only `claude_code.*` fields
+#   - R-005     : extract repeated conditions into list / macro
+#   - R-006     : place specific / high-severity rules above broad NOTICE rules
+#   - R-007     : output must include enough context but no raw secret values
+#   - R-008     : prefer `icontains` and detector-driven `risk_type`/`risk_score`
 #   - R-011     : compare boolean-string fields with literals "true" / "false"
+#
+# Rule layout (R-006 ordering):
+#   - lists      : reusable token sets
+#   - macros     : reusable condition fragments
+#   - rules      : CRITICAL → WARNING → NOTICE
+#
+# T-IDs covered: T-001..T-018 (T-013 split into low/high per §12.1 priority note).
 
 - required_plugin_versions:
     - name: claude-code
       version: 0.1.0
 
-# --- Macros (Phase 3 will expand; only the minimum needed by T-001 is here) ---
+# =====================================================================
+# Lists (R-005 — reusable token sets)
+# =====================================================================
+
+- list: claude_code_dangerous_bash_tokens
+  items:
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "rm -rf ~"
+    - "rm -rf $HOME"
+    - "rm -fr /"
+    - "mkfs"
+    - "dd if="
+    - "chmod -R 777"
+    - "chmod 777"
+    - ":(){:|:&};:"
+    - "/dev/sda"
+    - "shutdown -h"
+    - "reboot"
+
+- list: claude_code_sensitive_paths
+  items:
+    - "/.env"
+    - "/.envrc"
+    - "id_rsa"
+    - "id_ed25519"
+    - "id_dsa"
+    - "id_ecdsa"
+    - "/.ssh/"
+    - "/.aws/credentials"
+    - "/.kube/config"
+    - "kubeconfig"
+    - "/.git/config"
+    - "/.npmrc"
+    - "/.pypirc"
+    - "/.gcp/"
+    - "/etc/shadow"
+    - "/etc/passwd"
+
+- list: claude_code_secret_tokens
+  items:
+    - ".env"
+    - "id_rsa"
+    - "id_ed25519"
+    - "AKIA"
+    - "ASIA"
+    - ".aws/credentials"
+    - ".kube/config"
+    - "kubeconfig"
+    - "secret_access_key"
+    - "private_key"
+
+- list: claude_code_external_transfer_tools
+  items:
+    - "curl "
+    - "wget "
+    - "scp "
+    - "rsync "
+    - " nc "
+    - " ncat "
+    - "pbcopy"
+    - "ssh "
+    - "openssl s_client"
+
+- list: claude_code_settings_paths
+  items:
+    - "/.claude/settings.json"
+    - "/.claude/settings.local.json"
+    - "/.claude/managed-settings.json"
+
+- list: claude_code_mcp_paths
+  items:
+    - ".mcp.json"
+    - "/.claude.json"
+    - "managed-mcp.json"
+
+- list: claude_code_skill_paths
+  items:
+    - "/.claude/skills/"
+    - "/.claude/commands/"
+
+- list: claude_code_agent_paths
+  items:
+    - "/.claude/agents/"
+
+- list: claude_code_destructive_git_tokens
+  items:
+    - "git reset --hard"
+    - "git clean -fdx"
+    - "git clean -fd"
+    - "git push --force"
+    - "git push -f"
+    - "git branch -D "
+    - "git update-ref -d"
+    - "rm -rf .git"
+
+- list: claude_code_prompt_injection_phrases
+  items:
+    - "ignore previous instructions"
+    - "ignore all previous"
+    - "disregard previous instructions"
+    - "reveal system prompt"
+    - "show your system prompt"
+    - "print your instructions"
+    - "exfiltrate"
+    - "you are now in developer mode"
+    - "do anything now"
+
+- list: claude_code_policy_downgrade_phrases
+  items:
+    - "disableBypassPermissionsMode: false"
+    - "disableBypassPermissionsMode\":false"
+    - "deny: []"
+    - "\"deny\":[]"
+    - "sandbox: false"
+    - "\"sandbox\":false"
+
+- list: claude_code_skill_shell_phrases
+  items:
+    - "shellExecution: true"
+    - "\"shellExecution\":true"
+    - "shell_execution: true"
+
+- list: claude_code_channel_push_phrases
+  items:
+    - "channel"
+    - "channelPush"
+    - "channel_push"
+    - "push_message"
+
+# =====================================================================
+# Macros (R-005 — reusable condition fragments)
+# =====================================================================
 
 - macro: claude_code_is_bash
   condition: claude_code.tool_name = "Bash"
@@ -21,25 +165,510 @@
 - macro: claude_code_is_tool_preflight
   condition: claude_code.event_name in ("PreToolUse", "PermissionRequest")
 
-# --- T-001: Dangerous Bash Command (CRITICAL) ---
-# Reference rule from §12.3. Phase 3 expands the pattern set and adds T-002..T-018.
+- macro: claude_code_is_settings_change
+  condition: claude_code.event_name in ("ConfigChange", "FileChanged")
 
+- macro: claude_code_is_mcp_tool
+  condition: claude_code.tool_name startswith "mcp__"
+
+- macro: claude_code_is_subagent
+  condition: claude_code.event_name in ("SubagentStart", "TaskCreated", "AgentStart")
+
+- macro: claude_code_is_external_fetch
+  condition: claude_code.tool_name in ("WebFetch", "WebSearch")
+
+- macro: claude_code_has_high_risk_score
+  condition: claude_code.risk_score >= 70
+
+- macro: claude_code_has_critical_risk_score
+  condition: claude_code.risk_score >= 90
+
+- macro: claude_code_command_uses_external_transfer
+  condition: >
+    (claude_code.command icontains "curl " or
+     claude_code.command icontains "wget " or
+     claude_code.command icontains "scp " or
+     claude_code.command icontains "rsync " or
+     claude_code.command icontains " nc " or
+     claude_code.command icontains " ncat " or
+     claude_code.command icontains "pbcopy" or
+     claude_code.command icontains "openssl s_client")
+
+- macro: claude_code_command_references_secret
+  condition: >
+    (claude_code.command icontains ".env" or
+     claude_code.command icontains "id_rsa" or
+     claude_code.command icontains "id_ed25519" or
+     claude_code.command icontains "AKIA" or
+     claude_code.command icontains ".aws/credentials" or
+     claude_code.command icontains ".kube/config" or
+     claude_code.command icontains "kubeconfig" or
+     claude_code.command icontains "secret_access_key" or
+     claude_code.command icontains "private_key")
+
+- macro: claude_code_url_or_evidence_has_secret_context
+  condition: >
+    (claude_code.url icontains ".env" or
+     claude_code.url icontains "secret" or
+     claude_code.url icontains "token" or
+     claude_code.url icontains "credentials" or
+     claude_code.evidence icontains ".env" or
+     claude_code.evidence icontains "secret" or
+     claude_code.evidence icontains "credential")
+
+# =====================================================================
+# Rules (R-006 — CRITICAL → WARNING → NOTICE)
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# T-001: Dangerous Bash Command (CRITICAL) — rule-side string match
+# ---------------------------------------------------------------------
 - rule: "[CLAUDE_CODE CRITICAL] Dangerous Bash Command"
-  desc: Detect dangerous Bash commands attempted by Claude Code
+  desc: Detect dangerous Bash commands attempted by Claude Code (PreToolUse / PermissionRequest)
   condition: >
     claude_code_is_tool_preflight and
     claude_code_is_bash and
     (
       claude_code.command icontains "rm -rf /" or
+      claude_code.command icontains "rm -rf /*" or
+      claude_code.command icontains "rm -rf ~" or
+      claude_code.command icontains "rm -rf $HOME" or
+      claude_code.command icontains "rm -fr /" or
       (claude_code.command icontains "curl" and claude_code.command icontains "| sh") or
+      (claude_code.command icontains "wget" and claude_code.command icontains "| sh") or
       claude_code.command icontains "chmod 777" or
+      claude_code.command icontains "chmod -R 777" or
       claude_code.command icontains "mkfs" or
-      claude_code.command icontains "dd if="
+      claude_code.command icontains "dd if=" or
+      claude_code.command icontains ":(){:|:&};:" or
+      claude_code.command icontains "shutdown -h" or
+      claude_code.command icontains "/dev/sda"
     )
   output: >
     [CLAUDE_CODE] dangerous bash command
     (session=%claude_code.session_id user=%claude_code.user cwd=%claude_code.cwd
-    command=%claude_code.command evidence=%claude_code.evidence risk=%claude_code.risk_score)
+    tool=%claude_code.tool_name command=%claude_code.command
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
   priority: CRITICAL
   source: claude_code
   tags: [claude_code, ai_agent, bash, critical, T-001]
+
+# ---------------------------------------------------------------------
+# T-002: Secret Exfiltration Attempt (CRITICAL) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE CRITICAL] Secret Exfiltration Attempt"
+  desc: Detect attempts to exfiltrate credential / secret material via curl, wget, scp, nc, pbcopy
+  condition: >
+    claude_code.risk_type = "secret_exfiltration" or
+    (
+      claude_code_is_bash and
+      claude_code_command_uses_external_transfer and
+      claude_code_command_references_secret
+    )
+  output: >
+    [CLAUDE_CODE] secret exfiltration attempt
+    (session=%claude_code.session_id user=%claude_code.user cwd=%claude_code.cwd
+    tool=%claude_code.tool_name command=%claude_code.command url=%claude_code.url
+    evidence=%claude_code.evidence severity=%claude_code.severity risk=%claude_code.risk_score)
+  priority: CRITICAL
+  source: claude_code
+  tags: [claude_code, secret, exfiltration, critical, T-002]
+
+# ---------------------------------------------------------------------
+# T-003: Permission Bypass Mode (CRITICAL) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE CRITICAL] Permission Bypass Mode"
+  desc: Detect bypassPermissions mode or --dangerously-skip-permissions flag use
+  condition: >
+    claude_code.risk_type = "permission_bypass" or
+    claude_code.permission_mode = "bypassPermissions" or
+    claude_code.command icontains "--dangerously-skip-permissions" or
+    claude_code.evidence icontains "skipDangerousModePermissionPrompt"
+  output: >
+    [CLAUDE_CODE] permission bypass mode active
+    (session=%claude_code.session_id user=%claude_code.user
+    permission_mode=%claude_code.permission_mode command=%claude_code.command
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: CRITICAL
+  source: claude_code
+  tags: [claude_code, permission, bypass, critical, T-003]
+
+# ---------------------------------------------------------------------
+# T-006: Hook Disabled Or Modified (CRITICAL) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE CRITICAL] Hook Disabled Or Modified"
+  desc: Detect Claude Code hook subsystem being disabled, removed, or modified
+  condition: >
+    claude_code.risk_type = "hook_disabled" or
+    (
+      claude_code_is_settings_change and
+      (
+        claude_code.evidence icontains "disableAllHooks" or
+        claude_code.evidence icontains "\"hooks\":{}" or
+        claude_code.evidence icontains "hook_removed" or
+        claude_code.evidence icontains "hooks: null"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] hook disabled or modified
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: CRITICAL
+  source: claude_code
+  tags: [claude_code, hook, settings, critical, T-006]
+
+# ---------------------------------------------------------------------
+# T-016: Config Policy Downgrade (CRITICAL) — rule-side string match
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE CRITICAL] Config Policy Downgrade"
+  desc: Detect downgrade of safety policy (sandbox/deny rule removal, bypass mode unlock)
+  condition: >
+    claude_code.event_name = "ConfigChange" and
+    (
+      claude_code.evidence icontains "disableBypassPermissionsMode: false" or
+      claude_code.evidence icontains "disableBypassPermissionsMode\":false" or
+      claude_code.evidence icontains "deny: []" or
+      claude_code.evidence icontains "\"deny\":[]" or
+      claude_code.evidence icontains "sandbox: false" or
+      claude_code.evidence icontains "\"sandbox\":false"
+    )
+  output: >
+    [CLAUDE_CODE] config policy downgrade
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: CRITICAL
+  source: claude_code
+  tags: [claude_code, config, downgrade, critical, T-016]
+
+# ---------------------------------------------------------------------
+# T-004: Suspicious Permission Update (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Suspicious Permission Update"
+  desc: Detect persistent permission update toward userSettings / projectSettings (allow rule additions)
+  condition: >
+    claude_code.risk_type = "permission_update" or
+    (
+      claude_code.event_name = "PermissionRequest" and
+      claude_code.permission_destination in ("userSettings", "projectSettings") and
+      claude_code.permission_behavior = "allow"
+    )
+  output: >
+    [CLAUDE_CODE] suspicious permission update
+    (session=%claude_code.session_id user=%claude_code.user
+    destination=%claude_code.permission_destination behavior=%claude_code.permission_behavior
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, permission, update, warning, T-004]
+
+# ---------------------------------------------------------------------
+# T-005: Claude Settings Modified (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Claude Settings Modified"
+  desc: Detect changes to Claude Code settings files (~/.claude/settings.json and friends)
+  condition: >
+    claude_code.risk_type = "settings_modified" or
+    (
+      claude_code_is_settings_change and
+      (
+        claude_code.file_path icontains "/.claude/settings.json" or
+        claude_code.file_path icontains "/.claude/settings.local.json" or
+        claude_code.file_path icontains "/.claude/managed-settings.json"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] claude settings modified
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, settings, warning, T-005]
+
+# ---------------------------------------------------------------------
+# T-007: MCP Config Changed (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] MCP Config Changed"
+  desc: Detect changes to MCP configuration files (.mcp.json / ~/.claude.json / managed-mcp.json)
+  condition: >
+    claude_code.risk_type = "mcp_config_changed" or
+    (
+      claude_code_is_settings_change and
+      (
+        claude_code.file_path icontains ".mcp.json" or
+        claude_code.file_path icontains "managed-mcp.json" or
+        claude_code.file_path icontains "/.claude.json"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] mcp config changed
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name mcp_scope=%claude_code.mcp_scope
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, mcp, config, warning, T-007]
+
+# ---------------------------------------------------------------------
+# T-008: Suspicious MCP Tool Use (WARNING) — rule-side
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Suspicious MCP Tool Use"
+  desc: Detect MCP tool calls with write / delete / admin / export semantics
+  condition: >
+    claude_code_is_mcp_tool and
+    (
+      claude_code.tool_name icontains "write" or
+      claude_code.tool_name icontains "delete" or
+      claude_code.tool_name icontains "admin" or
+      claude_code.tool_name icontains "export" or
+      claude_code.mcp_tool_name icontains "write" or
+      claude_code.mcp_tool_name icontains "delete" or
+      claude_code.mcp_tool_name icontains "admin" or
+      claude_code.mcp_tool_name icontains "export"
+    )
+  output: >
+    [CLAUDE_CODE] suspicious mcp tool use
+    (session=%claude_code.session_id user=%claude_code.user
+    mcp_server=%claude_code.mcp_server_name mcp_tool=%claude_code.mcp_tool_name
+    tool_name=%claude_code.tool_name evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, mcp, tool, warning, T-008]
+
+# ---------------------------------------------------------------------
+# T-009: Sensitive File Read (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Sensitive File Read"
+  desc: Detect read attempts against sensitive files (.env, private keys, kubeconfig, AWS credentials)
+  condition: >
+    claude_code.risk_type = "sensitive_file_read" or
+    (
+      claude_code.tool_name in ("Read", "Grep", "Glob") and
+      (
+        claude_code.file_path icontains "/.env" or
+        claude_code.file_path icontains "id_rsa" or
+        claude_code.file_path icontains "id_ed25519" or
+        claude_code.file_path icontains "/.git/config" or
+        claude_code.file_path icontains "/.kube/config" or
+        claude_code.file_path icontains "/.aws/credentials" or
+        claude_code.file_path icontains "/etc/shadow"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] sensitive file read attempt
+    (session=%claude_code.session_id user=%claude_code.user tool=%claude_code.tool_name
+    file=%claude_code.file_path evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, sensitive, file, warning, T-009]
+
+# ---------------------------------------------------------------------
+# T-010: Workspace Escape (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Workspace Escape"
+  desc: Detect path traversal or access to workspace-external sensitive directories
+  condition: >
+    claude_code.risk_type = "workspace_escape" or
+    (
+      (
+        claude_code.file_path icontains ".." or
+        claude_code.command icontains ".." or
+        claude_code.file_path startswith "/etc" or
+        claude_code.file_path icontains "/.ssh/" or
+        claude_code.file_path icontains "/private/etc/"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] workspace escape
+    (session=%claude_code.session_id user=%claude_code.user cwd=%claude_code.cwd
+    tool=%claude_code.tool_name file=%claude_code.file_path command=%claude_code.command
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, workspace, escape, warning, T-010]
+
+# ---------------------------------------------------------------------
+# T-011: Destructive Git Operation (WARNING) — risk_type from detector
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Destructive Git Operation"
+  desc: Detect destructive git operations (reset --hard, clean -fdx, force push, branch -D, .git rm)
+  condition: >
+    claude_code.risk_type = "git_destructive" or
+    (
+      claude_code_is_bash and
+      (
+        claude_code.command icontains "git reset --hard" or
+        claude_code.command icontains "git clean -fdx" or
+        claude_code.command icontains "git clean -fd" or
+        claude_code.command icontains "git push --force" or
+        claude_code.command icontains "git push -f" or
+        claude_code.command icontains "git branch -D " or
+        claude_code.command icontains "git update-ref -d" or
+        claude_code.command icontains "rm -rf .git"
+      )
+    )
+  output: >
+    [CLAUDE_CODE] destructive git operation
+    (session=%claude_code.session_id user=%claude_code.user cwd=%claude_code.cwd
+    command=%claude_code.command evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, git, destructive, warning, T-011]
+
+# ---------------------------------------------------------------------
+# T-012: Prompt Injection Pattern (WARNING) — rule-side
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Prompt Injection Pattern"
+  desc: Detect prompt-injection phrases in UserPromptSubmit / WebFetch evidence
+  condition: >
+    claude_code.event_name in ("UserPromptSubmit", "WebFetch", "MCPResource") and
+    (
+      claude_code.evidence icontains "ignore previous instructions" or
+      claude_code.evidence icontains "ignore all previous" or
+      claude_code.evidence icontains "disregard previous instructions" or
+      claude_code.evidence icontains "reveal system prompt" or
+      claude_code.evidence icontains "show your system prompt" or
+      claude_code.evidence icontains "print your instructions" or
+      claude_code.evidence icontains "exfiltrate" or
+      claude_code.evidence icontains "you are now in developer mode" or
+      claude_code.evidence icontains "do anything now"
+    )
+  output: >
+    [CLAUDE_CODE] prompt injection pattern
+    (session=%claude_code.session_id user=%claude_code.user event=%claude_code.event_name
+    url=%claude_code.url evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, prompt, injection, warning, T-012]
+
+# ---------------------------------------------------------------------
+# T-014: Agent Runaway Tool Storm (WARNING) — rule-side
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Agent Runaway Tool Storm"
+  desc: Detect runaway agent loops where tool_count within a batch crosses the storm threshold (>=50)
+  condition: >
+    claude_code.event_name = "PostToolBatch" and
+    claude_code.tool_count >= 50
+  output: >
+    [CLAUDE_CODE] agent runaway tool storm
+    (session=%claude_code.session_id user=%claude_code.user
+    tool_count=%claude_code.tool_count failure_count=%claude_code.failure_count
+    duration_ms=%claude_code.duration_ms risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, agent, storm, warning, T-014]
+
+# ---------------------------------------------------------------------
+# T-015: External Fetch With Sensitive Context (WARNING) — rule-side
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] External Fetch With Sensitive Context"
+  desc: Detect WebFetch / WebSearch combined with secret-like URL or evidence context
+  condition: >
+    claude_code_is_external_fetch and
+    (
+      claude_code_has_high_risk_score or
+      claude_code_url_or_evidence_has_secret_context
+    )
+  output: >
+    [CLAUDE_CODE] external fetch with sensitive context
+    (session=%claude_code.session_id user=%claude_code.user tool=%claude_code.tool_name
+    url=%claude_code.url domain=%claude_code.domain evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, external, fetch, warning, T-015]
+
+# ---------------------------------------------------------------------
+# T-017: Skill Or Command Shell Execution Risk (WARNING) — rule-side
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Skill Or Command Shell Execution Risk"
+  desc: Detect skill / command definition that enables shell execution
+  condition: >
+    claude_code.event_name = "ConfigChange" and
+    (
+      claude_code.file_path icontains "/.claude/skills/" or
+      claude_code.file_path icontains "/.claude/commands/" or
+      claude_code.evidence icontains "shellExecution: true" or
+      claude_code.evidence icontains "\"shellExecution\":true" or
+      claude_code.evidence icontains "shell_execution: true"
+    )
+  output: >
+    [CLAUDE_CODE] skill or command shell execution risk
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, skill, shell, warning, T-017]
+
+# ---------------------------------------------------------------------
+# T-013-high: Agent Subagent Risk (high)  — risk_score >= 70 → WARNING
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Agent Subagent Risk (high)"
+  desc: >
+    Detect subagent / task creation flagged as high-risk by detector
+    (risk_score >= 70 OR permission_mode bypass at subagent boundary).
+  condition: >
+    claude_code_is_subagent and
+    (
+      claude_code_has_high_risk_score or
+      claude_code.permission_mode = "bypassPermissions"
+    )
+  output: >
+    [CLAUDE_CODE] agent/subagent risk (high)
+    (session=%claude_code.session_id user=%claude_code.user event=%claude_code.event_name
+    permission_mode=%claude_code.permission_mode evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, agent, subagent, warning, T-013, T-013-high]
+
+# ---------------------------------------------------------------------
+# T-018: Channel Or MCP Push Risk (WARNING/NOTICE) — rule-side, condition gates score
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE WARNING] Channel Or MCP Push Risk (high)"
+  desc: >
+    Detect MCP / channel push configuration that enables external session injection,
+    only at risk_score >= 70 (otherwise the NOTICE rule fires).
+  condition: >
+    claude_code_is_settings_change and
+    (
+      claude_code.evidence icontains "channelPush" or
+      claude_code.evidence icontains "channel_push" or
+      claude_code.evidence icontains "push_message" or
+      (claude_code.evidence icontains "channel" and claude_code_has_high_risk_score)
+    )
+  output: >
+    [CLAUDE_CODE] channel or mcp push risk (high)
+    (session=%claude_code.session_id user=%claude_code.user file=%claude_code.file_path
+    event=%claude_code.event_name mcp_server=%claude_code.mcp_server_name
+    evidence=%claude_code.evidence risk=%claude_code.risk_score)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, channel, mcp, push, warning, T-018, T-018-high]
+
+# ---------------------------------------------------------------------
+# T-013-low: Agent Subagent Risk (low) — NOTICE
+# ---------------------------------------------------------------------
+- rule: "[CLAUDE_CODE NOTICE] Agent Subagent Risk (low)"
+  desc: >
+    Surface low-risk subagent / task creation events for aggregation
+    (risk_score < 70 and not in bypass mode).
+  condition: >
+    claude_code_is_subagent and
+    claude_code.risk_score < 70 and
+    not claude_code.permission_mode = "bypassPermissions"
+  output: >
+    [CLAUDE_CODE] agent/subagent risk (low)
+    (session=%claude_code.session_id user=%claude_code.user event=%claude_code.event_name
+    permission_mode=%claude_code.permission_mode evidence=%claude_code.evidence
+    risk=%claude_code.risk_score)
+  priority: NOTICE
+  source: claude_code
+  tags: [claude_code, agent, subagent, notice, T-013, T-013-low]

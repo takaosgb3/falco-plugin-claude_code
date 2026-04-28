@@ -1,0 +1,125 @@
+# Falco self-check rules for the claude-code plugin (Phase 3 — OPS-004 / §22.4).
+#
+# This file is intentionally separate from rules/claude-code_rules.yaml because
+# self-check rules are time-based and have different semantics from threat
+# detection. Keeping them in a dedicated file:
+#   - makes accidental disable / removal easier to spot in code review
+#   - allows operators to opt-out of self-check independently of detection rules
+#   - aligns with §22.4 OPS-004 explicit guidance:
+#       "rules/claude_code_rules.yaml とは別ファイル rules/claude_code_health.yaml に切り出す"
+#
+# All Falco yaml configurations (falco.yaml, falco-local.yaml, falco-docker.yaml)
+# list this file in `rules_files:` as an individual path (P007 — directory paths
+# are NOT used because Falco walks them in alphabetical order which is fragile).
+#
+# Constraints (do NOT remove):
+#   - P003 / R-001: every rule MUST have `source: claude_code`
+#   - P005 / R-002: do NOT use `evt.type`
+#   - R-003     : `required_plugin_versions` at the top
+#   - R-004     : reference only `claude_code.*` fields
+#
+# Health signals modelled here (v0.1):
+#   1. _heartbeat_ event_name        — emitted by hook logger on a timer; absence
+#                                       is the actual self-check, but receiving
+#                                       one with stale timestamp is also a signal.
+#   2. logger drop counter           — claude_code.dropped == "true" indicates
+#                                       FP-012 backpressure / write loss.
+#   3. parser malformed counter      — claude_code.event_name == "_malformed_"
+#                                       (parser's reserved tag for failed lines).
+
+- required_plugin_versions:
+    - name: claude-code
+      version: 0.1.0
+
+# =====================================================================
+# Health rule 1: Heartbeat received (informational)
+# =====================================================================
+# The hook logger periodically (default 5 min) writes a `_heartbeat_` event to
+# events.jsonl. We surface those at NOTICE so operators can confirm the
+# pipeline is alive when bringing the plugin up. In production these may be
+# silenced or routed to a separate sink; do NOT promote to WARNING.
+
+- rule: "[CLAUDE_CODE NOTICE] Plugin Heartbeat"
+  desc: >
+    Heartbeat event received from claude-code hook logger. Used by operators
+    to confirm the events.jsonl → plugin pipeline is healthy. The actual
+    "missing heartbeat" alert is implemented out-of-band (the doctor CLI;
+    see §22.4 OPS-005) because Falco rules cannot natively express
+    "absence of an event over N minutes".
+  condition: claude_code.event_name = "_heartbeat_"
+  output: >
+    [CLAUDE_CODE] heartbeat received
+    (session=%claude_code.session_id host=%claude_code.host
+    logger_version=%claude_code.logger_version received_at=%claude_code.received_at)
+  priority: NOTICE
+  source: claude_code
+  tags: [claude_code, health, heartbeat, notice, OPS-004]
+
+# =====================================================================
+# Health rule 2: Heartbeat with anomalously high latency (WARNING)
+# =====================================================================
+# A heartbeat that arrives with latency_ms >= 5000 (5s) means the plugin is
+# falling behind — events.jsonl is being written but tailing is delayed.
+# Threshold is conservative and aligns with §8.2 latency SLO worst-case.
+
+- rule: "[CLAUDE_CODE WARNING] Plugin Heartbeat Stale"
+  desc: >
+    A heartbeat from the claude-code hook logger arrived but the end-to-end
+    latency exceeds the 5s SLO floor (§8.2). Indicates the plugin or the
+    file tail is falling behind. Investigate fsnotify health, channel
+    backpressure, or disk I/O.
+  condition: >
+    claude_code.event_name = "_heartbeat_" and
+    claude_code.latency_ms >= 5000
+  output: >
+    [CLAUDE_CODE] heartbeat latency above SLO floor
+    (session=%claude_code.session_id host=%claude_code.host
+    latency_ms=%claude_code.latency_ms received_at=%claude_code.received_at
+    logger_version=%claude_code.logger_version)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, health, heartbeat, latency, warning, OPS-004]
+
+# =====================================================================
+# Health rule 3: Plugin dropped events (WARNING)
+# =====================================================================
+# §6.3 FP-012: when the plugin's eventCh is full, events are dropped and the
+# `dropped` field is "true" on the surviving event(s). R-011: compare with
+# string literal, NOT bare boolean.
+
+- rule: "[CLAUDE_CODE WARNING] Plugin Dropped Events"
+  desc: >
+    The plugin internal eventCh saturated and at least one event was marked
+    as dropped (FP-012). Indicates burstiness exceeded EventBufferSize or
+    Falco-side backpressure.
+  condition: claude_code.dropped = "true"
+  output: >
+    [CLAUDE_CODE] plugin dropped events (channel saturated)
+    (session=%claude_code.session_id host=%claude_code.host
+    event=%claude_code.event_name received_at=%claude_code.received_at)
+  priority: WARNING
+  source: claude_code
+  tags: [claude_code, health, dropped, backpressure, warning, OPS-003]
+
+# =====================================================================
+# Health rule 4: Parser malformed line counter (NOTICE)
+# =====================================================================
+# §14.1 P-003: parser flags malformed JSONL lines. The plugin emits a
+# `_malformed_` event_name as a sentinel so operators can see the tail
+# position and timestamp. Persistent malformed events suggest a logger
+# version mismatch (RK-001 schema drift).
+
+- rule: "[CLAUDE_CODE NOTICE] Parser Malformed Line"
+  desc: >
+    Parser encountered a malformed JSONL line. Single hits are tolerable
+    (transient write race); persistent occurrence indicates schema drift
+    or logger corruption.
+  condition: claude_code.event_name = "_malformed_"
+  output: >
+    [CLAUDE_CODE] parser malformed line
+    (host=%claude_code.host received_at=%claude_code.received_at
+    raw_event_sha256=%claude_code.raw_event_sha256
+    redaction_status=%claude_code.redaction_status)
+  priority: NOTICE
+  source: claude_code
+  tags: [claude_code, health, malformed, notice, RK-001]

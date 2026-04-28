@@ -16,6 +16,7 @@ load_plugins: [claude-code]
 # P007: individual file paths
 rules_files:
   - /etc/falco/rules.d/claude-code_rules.yaml
+  - /etc/falco/rules.d/claude_code_health.yaml
 
 stdout_output:
   enabled: true
