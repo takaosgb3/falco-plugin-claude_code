@@ -406,3 +406,43 @@ allure-falco-clean:
 #### B-19/B-20: 次工程
 - git commit with Co-Authored-By 付与
 - Issue #2 へ最終報告
+
+---
+
+### 2026-04-28 — 本セッションでの Playwright MCP 真の verify
+
+agent の B-16 検証は Chrome headless で実施され、Playwright MCP 未利用だった。
+本セッションで実 Playwright MCP 経由で再検証を実施。
+
+#### Pre-check で発見した小差分
+- `make allure-falco-results` を単発で実行すると 20 件しか生成されない瞬間があった
+- 実 Makefile target は Categories + Benign + Heartbeat の 3 テストを含むので、
+  正常な完全実行で 25 件になる。再実行確認済み。
+
+#### Playwright MCP verify 結果
+
+| # | 検証内容 | 結果 | 証拠（docs/screenshots/allure-falco/） |
+|---|---|---|---|
+| V-1 | Overview: 25 cases / 100% / 「FEATURES BY STORIES: Claude Code E2E Security Tests (20)」表示 | PASS | allure-falco-overview.png |
+| V-2 | Behaviors ページで Epic / Feature 階層完全展開（Epic=1、Feature=20） | PASS | allure-falco-behaviors.png, allure-falco-behaviors-expanded.png |
+| V-3 | T-001 Feature 配下に 2 stories（T-001-curl-pipe-sh + T-001-dangerous-bash-rm） | PASS | allure-falco-detail-T001.png |
+| V-4 | 個別 test case の Markdown description 表示（Attack Pattern Info / Attack Details / Test Execution / Rule Mapping） | **PASS（openclaw スタイル完全再現）** | allure-falco-test-detail-T001-rm.png |
+| V-5 | Graphs Severity bar: critical=6, normal=13, minor=2, trivial=4（§3.2 完全一致） | PASS | allure-falco-graphs.png |
+
+#### 結論
+
+**ユーザー期待通りの openclaw 風シナリオ駆動 Allure レポート完全再現を Playwright MCP で確認**:
+- Epic / Feature / Story 階層 ✓
+- Severity 別マッピング ✓
+- Markdown description (Pattern info + Payload + Rule Mapping) ✓
+- Falco alert 全文 evidence 表示 ✓
+- 25 cases、100% PASS、Severity 6/13/2/4 正確
+
+### Status
+
+```
+最終更新: 2026-04-28 Playwright MCP verify 完了
+完了: B-1〜B-20 + V-1〜V-5 すべて
+進行中: なし
+ブロッカー: なし
+```
