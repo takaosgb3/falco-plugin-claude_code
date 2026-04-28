@@ -254,9 +254,15 @@ Generate the Allure HTML report locally:
 
 ```bash
 brew install gotestsum allure   # first time only (macOS)
-make allure                      # produces allure-report/index.html
-open allure-report/index.html
+make allure-serve                # builds the report and serves it on a local HTTP server
 ```
+
+`make allure-serve` runs `allure open` which spawns a local HTTP server and
+opens the browser. Do **not** open `allure-report/index.html` directly via
+`file://` — modern browsers block the JSON fetches the report uses to load
+data, so the widgets render blank. If you only need the static files (e.g. to
+upload them as a CI artifact), use `make allure` and serve the resulting
+`allure-report/` directory via any HTTP server.
 
 On Linux, install `gotestsum` via `go install gotest.tools/gotestsum@latest`
 and `allure` from the [official release](https://github.com/allure-framework/allure2/releases).

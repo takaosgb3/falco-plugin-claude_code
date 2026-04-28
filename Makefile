@@ -33,7 +33,7 @@ else
   endif
 endif
 
-.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom allure-deps allure-results allure-report allure allure-clean
+.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom allure-deps allure-results allure-report allure allure-serve allure-clean
 
 # P002: -buildmode=c-shared is REQUIRED (without it, Falco cannot load the plugin)
 build:
@@ -204,11 +204,17 @@ allure-results: allure-deps
 allure-report: allure-results
 	allure generate $(ALLURE_RESULTS) -o $(ALLURE_REPORT) --clean
 	@echo ""
-	@echo "Allure report generated. Open with:"
-	@echo "  open $(ALLURE_REPORT)/index.html  (macOS)"
-	@echo "  xdg-open $(ALLURE_REPORT)/index.html  (Linux)"
+	@echo "Allure report generated. View it via HTTP (CORS-safe):"
+	@echo "  make allure-serve   # opens browser via local HTTP server"
+	@echo ""
+	@echo "Note: opening $(ALLURE_REPORT)/index.html directly via file://"
+	@echo "      blocks JSON fetches in modern browsers and shows blank widgets."
 
 allure: allure-report
+
+allure-serve: allure-report
+	@echo "Starting Allure HTTP server (Ctrl-C to stop)..."
+	allure open $(ALLURE_REPORT)
 
 allure-clean:
 	rm -rf $(ALLURE_RESULTS) $(ALLURE_REPORT)
