@@ -28,132 +28,17 @@
 # =====================================================================
 # Lists (R-005 — reusable token sets)
 # =====================================================================
-
-- list: claude_code_dangerous_bash_tokens
-  items:
-    - "rm -rf /"
-    - "rm -rf /*"
-    - "rm -rf ~"
-    - "rm -rf $HOME"
-    - "rm -fr /"
-    - "mkfs"
-    - "dd if="
-    - "chmod -R 777"
-    - "chmod 777"
-    - ":(){:|:&};:"
-    - "/dev/sda"
-    - "shutdown -h"
-    - "reboot"
-
-- list: claude_code_sensitive_paths
-  items:
-    - "/.env"
-    - "/.envrc"
-    - "id_rsa"
-    - "id_ed25519"
-    - "id_dsa"
-    - "id_ecdsa"
-    - "/.ssh/"
-    - "/.aws/credentials"
-    - "/.kube/config"
-    - "kubeconfig"
-    - "/.git/config"
-    - "/.npmrc"
-    - "/.pypirc"
-    - "/.gcp/"
-    - "/etc/shadow"
-    - "/etc/passwd"
-
-- list: claude_code_secret_tokens
-  items:
-    - ".env"
-    - "id_rsa"
-    - "id_ed25519"
-    - "AKIA"
-    - "ASIA"
-    - ".aws/credentials"
-    - ".kube/config"
-    - "kubeconfig"
-    - "secret_access_key"
-    - "private_key"
-
-- list: claude_code_external_transfer_tools
-  items:
-    - "curl "
-    - "wget "
-    - "scp "
-    - "rsync "
-    - " nc "
-    - " ncat "
-    - "pbcopy"
-    - "ssh "
-    - "openssl s_client"
-
-- list: claude_code_settings_paths
-  items:
-    - "/.claude/settings.json"
-    - "/.claude/settings.local.json"
-    - "/.claude/managed-settings.json"
-
-- list: claude_code_mcp_paths
-  items:
-    - ".mcp.json"
-    - "/.claude.json"
-    - "managed-mcp.json"
-
-- list: claude_code_skill_paths
-  items:
-    - "/.claude/skills/"
-    - "/.claude/commands/"
-
-- list: claude_code_agent_paths
-  items:
-    - "/.claude/agents/"
-
-- list: claude_code_destructive_git_tokens
-  items:
-    - "git reset --hard"
-    - "git clean -fdx"
-    - "git clean -fd"
-    - "git push --force"
-    - "git push -f"
-    - "git branch -D "
-    - "git update-ref -d"
-    - "rm -rf .git"
-
-- list: claude_code_prompt_injection_phrases
-  items:
-    - "ignore previous instructions"
-    - "ignore all previous"
-    - "disregard previous instructions"
-    - "reveal system prompt"
-    - "show your system prompt"
-    - "print your instructions"
-    - "exfiltrate"
-    - "you are now in developer mode"
-    - "do anything now"
-
-- list: claude_code_policy_downgrade_phrases
-  items:
-    - "disableBypassPermissionsMode: false"
-    - "disableBypassPermissionsMode\":false"
-    - "deny: []"
-    - "\"deny\":[]"
-    - "sandbox: false"
-    - "\"sandbox\":false"
-
-- list: claude_code_skill_shell_phrases
-  items:
-    - "shellExecution: true"
-    - "\"shellExecution\":true"
-    - "shell_execution: true"
-
-- list: claude_code_channel_push_phrases
-  items:
-    - "channel"
-    - "channelPush"
-    - "channel_push"
-    - "push_message"
+#
+# Phase 5 cleanup: lists previously defined here for "future re-use" were
+# removed because every rule below now writes the relevant tokens inline as
+# `icontains` literals. Keeping unused list/macro definitions caused Falco
+# to emit 14 LOAD_UNUSED warnings on startup (P4-8b). The historical lists
+# (claude_code_dangerous_bash_tokens, _sensitive_paths, _secret_tokens,
+# _external_transfer_tools, _settings_paths, _mcp_paths, _skill_paths,
+# _agent_paths, _destructive_git_tokens, _prompt_injection_phrases,
+# _policy_downgrade_phrases, _skill_shell_phrases, _channel_push_phrases)
+# can be reintroduced if a future rule needs to share tokens — start with
+# §29 Appendix B in the requirements doc as the canonical source.
 
 # =====================================================================
 # Macros (R-005 — reusable condition fragments)
@@ -180,8 +65,9 @@
 - macro: claude_code_has_high_risk_score
   condition: claude_code.risk_score >= 70
 
-- macro: claude_code_has_critical_risk_score
-  condition: claude_code.risk_score >= 90
+# Note: claude_code_has_critical_risk_score (>= 90) was removed in Phase 5.
+# It was defined for future use but never referenced by any rule, triggering
+# LOAD_UNUSED_MACRO warnings. Reintroduce when a rule needs the >=90 cutoff.
 
 - macro: claude_code_command_uses_external_transfer
   condition: >

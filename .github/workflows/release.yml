@@ -1,5 +1,18 @@
 name: Release
 
+# Phase 5 release workflow (requirements v3 §21 + §27.4):
+#   - matrix build for linux/amd64 (.so) and darwin/arm64 (.dylib)
+#   - artifact: plugin .so/.dylib + logger + doctor + checksums + SBOM
+#   - SC-002: SBOM generation via anchore/sbom-action (CycloneDX JSON)
+#   - SC-003: cosign keyless signing of plugin/logger/doctor/SBOM
+#   - SC-001: SHA-256 checksums via OS-appropriate tool (B-007)
+#   - B-005: matrix split between Linux and macOS runners
+#
+# Trigger:
+#   - workflow_dispatch (manual): for release rehearsals on a branch
+#   - tag push v*.*.*: official release. Phase 5 only WIRES this; the actual
+#     v0.1.0 tag push happens in Phase 6 by a human.
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,11 +20,18 @@ on:
         description: 'Release version (e.g., v0.1.0)'
         required: true
         type: string
+  push:
+    tags:
+      - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: write   # create release + upload assets
+  id-token: write   # cosign keyless OIDC (SC-003)
 
 jobs:
+  # ----------------------------------------------------------------------
+  # Stage 1: validate (vet + test). Run once on Linux to fail fast.
+  # ----------------------------------------------------------------------
   validate:
     runs-on: ubuntu-24.04
     steps:
@@ -27,6 +47,14 @@ jobs:
       - name: Run Vet
         run: go vet ./...
 
+      - name: Validate Rules
+        run: make validate-rules
+
+  # ----------------------------------------------------------------------
+  # Stage 2: matrix build for the two release targets. Each runner
+  # natively builds its own artifact (B-002, B-005) and emits checksums
+  # using the OS-appropriate tool (B-007).
+  # ----------------------------------------------------------------------
   build:
     needs: validate
     strategy:
@@ -38,12 +66,14 @@ jobs:
             ext: .so
             binary: libclaude-code-plugin-linux-amd64.so
             logger: claude-code-security-logger-linux-amd64
-          - os: macos-14
+            doctor: claude-code-doctor-linux-amd64
+          - os: macos-14   # Apple Silicon hosted runner
             goos: darwin
             goarch: arm64
             ext: .dylib
             binary: libclaude-code-plugin-darwin-arm64.dylib
             logger: claude-code-security-logger-darwin-arm64
+            doctor: claude-code-doctor-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -52,45 +82,166 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build Release Binary
+      - name: Build plugin (release)
         run: make build-release
 
-      - name: Generate Checksums
+      - name: Build doctor CLI
+        run: make build-doctor
+
+      - name: Verify plugin binary
+        run: make verify
+
+      - name: Build SBOM (CycloneDX JSON)
+        # SC-002. anchore/sbom-action runs on both ubuntu and macos hosted
+        # runners and emits sbom.cdx.json scoped to the repo root.
+        if: matrix.os == 'ubuntu-24.04'   # SBOM is once per release, not per arch
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: claude-code-plugin-sbom
+
+      - name: Install cosign
+        # SC-003 — cosign keyless signing.
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign artifacts (cosign keyless)
+        # Each platform signs its own .so/.dylib + logger + doctor.
+        # The Linux job additionally signs the SBOM (built once above).
+        env:
+          COSIGN_YES: "true"
         run: |
-          shasum -a 256 ${{ matrix.binary }} > ${{ matrix.binary }}.sha256
-          shasum -a 256 ${{ matrix.logger }} > ${{ matrix.logger }}.sha256
+          set -euo pipefail
+          sign() {
+            local f="$1"
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.cert" \
+              "${f}"
+          }
+          sign "${{ matrix.binary }}"
+          sign "${{ matrix.logger }}"
+          sign "${{ matrix.doctor }}"
+          if [ -f sbom.cdx.json ]; then
+            sign sbom.cdx.json
+          fi
+
+      - name: Generate checksums (SC-001 / B-007)
+        run: |
+          set -euo pipefail
+          if [ "$(uname -s)" = "Darwin" ]; then
+            CMD="shasum -a 256"
+          else
+            CMD="sha256sum"
+          fi
+          $CMD "${{ matrix.binary }}"  > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+          $CMD "${{ matrix.logger }}" >> "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+          $CMD "${{ matrix.doctor }}" >> "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+          if [ -f sbom.cdx.json ]; then
+            $CMD sbom.cdx.json >> "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+          fi
+          cat "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: plugin-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Wildcards capture all the per-platform pieces. The release job
+          # downloads everything and merges per-OS checksums into one file.
           path: |
             ${{ matrix.binary }}
-            ${{ matrix.binary }}.sha256
+            ${{ matrix.binary }}.sig
+            ${{ matrix.binary }}.cert
             ${{ matrix.logger }}
-            ${{ matrix.logger }}.sha256
+            ${{ matrix.logger }}.sig
+            ${{ matrix.logger }}.cert
+            ${{ matrix.doctor }}
+            ${{ matrix.doctor }}.sig
+            ${{ matrix.doctor }}.cert
+            sbom.cdx.json
+            sbom.cdx.json.sig
+            sbom.cdx.json.cert
+            checksums-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
 
+  # ----------------------------------------------------------------------
+  # Stage 3: gather artifacts from both runners and create the release.
+  # ----------------------------------------------------------------------
   release:
     needs: build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download All Artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
 
-      - name: Create Release
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # Flatten artifact directories (download-artifact creates one dir
+          # per upload-artifact call, so we have plugin-linux-amd64/ and
+          # plugin-darwin-arm64/).
+          find artifacts -type f -print0 | xargs -0 -I{} cp {} release/
+          # Merge per-OS checksum files. Some artifacts (sbom.cdx.json) are
+          # produced once but copied by both jobs — uniq by line.
+          (cat release/checksums-*.sha256 || true) | sort -u > release/checksums.sha256
+          rm -f release/checksums-*.sha256
+
+      - name: Stage rules and config
+        run: |
+          set -euo pipefail
+          cp rules/claude-code_rules.yaml release/
+          cp rules/claude_code_health.yaml release/
+          cp falco.yaml release/
+          cp falco-local.yaml release/
+          cp falco-docker.yaml release/
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version }}
-          name: ${{ inputs.version }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
           files: |
-            artifacts/**/*.so
-            artifacts/**/*.dylib
-            artifacts/**/claude-code-security-logger-*
-            artifacts/**/*.sha256
-            rules/claude-code_rules.yaml
-            falco-local.yaml
+            release/libclaude-code-plugin-linux-amd64.so
+            release/libclaude-code-plugin-linux-amd64.so.sig
+            release/libclaude-code-plugin-linux-amd64.so.cert
+            release/libclaude-code-plugin-darwin-arm64.dylib
+            release/libclaude-code-plugin-darwin-arm64.dylib.sig
+            release/libclaude-code-plugin-darwin-arm64.dylib.cert
+            release/claude-code-security-logger-linux-amd64
+            release/claude-code-security-logger-linux-amd64.sig
+            release/claude-code-security-logger-linux-amd64.cert
+            release/claude-code-security-logger-darwin-arm64
+            release/claude-code-security-logger-darwin-arm64.sig
+            release/claude-code-security-logger-darwin-arm64.cert
+            release/claude-code-doctor-linux-amd64
+            release/claude-code-doctor-linux-amd64.sig
+            release/claude-code-doctor-linux-amd64.cert
+            release/claude-code-doctor-darwin-arm64
+            release/claude-code-doctor-darwin-arm64.sig
+            release/claude-code-doctor-darwin-arm64.cert
+            release/sbom.cdx.json
+            release/sbom.cdx.json.sig
+            release/sbom.cdx.json.cert
+            release/checksums.sha256
+            release/claude-code_rules.yaml
+            release/claude_code_health.yaml
+            release/falco.yaml
+            release/falco-local.yaml
+            release/falco-docker.yaml

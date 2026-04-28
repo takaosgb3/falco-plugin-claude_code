@@ -46,12 +46,62 @@ Claude Code Hook
 ```bash
 make build           # Auto-detects OS: .dylib on macOS arm64, .so on Linux
 make build-release   # Stripped, trimpath
+make build-doctor    # Build the operator doctor CLI (OPS-001..OPS-006)
+make build-all       # plugin + logger + doctor
 make test            # go test ./... -v
 make e2e             # Level 1 (pattern) + Level 2 (pipeline) tests
 make verify          # Validate Mach-O / ELF shape (P001)
+make package         # Release artifact bundle + checksums.sha256
 ```
 
 `-buildmode=c-shared` is mandatory (P002). The Makefile sets it on every build.
+
+## Operator CLI: `claude-code-doctor`
+
+Implements §22.4 OPS-001..OPS-006 — runtime diagnostics for the plugin and
+events.jsonl pipeline. Useful for installation validation, CI smoke checks,
+and on-call triage.
+
+```bash
+claude-code-doctor env                                  # OPS-001 environment
+claude-code-doctor plugin-load --config falco.yaml      # OPS-002 plugin load
+claude-code-doctor rule-check  --config falco.yaml      # OPS-003 rule load
+claude-code-doctor self-check                            # OPS-004 health rule
+claude-code-doctor tail-position [path] --max-age 15m   # OPS-005 staleness
+claude-code-doctor verify-signature <bin>                # OPS-006 cosign
+claude-code-doctor all --config falco.yaml               # env+load+rules+health
+```
+
+Exit codes: `0=PASS`, `1=FAIL`, `2=SKIP` (prerequisite missing — e.g. Falco
+not installed → graceful), `3=STALE` (`tail-position` only).
+
+`--max-age` accepts Go `time.ParseDuration` syntax with explicit units only
+(`15m`, `1h30m`, `30s`). Bare integers are rejected.
+
+## Verifying release artifacts
+
+v0.1.0 release artifacts are signed with `cosign` keyless OIDC (§27.4 SC-003)
+in addition to SHA-256 checksums (§27.4 SC-001) and CycloneDX SBOM (SC-002).
+
+```bash
+# 1. Verify checksums (mandatory):
+sha256sum -c checksums.sha256                # Linux
+shasum -a 256 -c checksums.sha256             # macOS
+
+# 2. Verify cosign keyless signature (recommended):
+cosign verify-blob \
+  --certificate libclaude-code-plugin-linux-amd64.so.cert \
+  --signature  libclaude-code-plugin-linux-amd64.so.sig \
+  --certificate-identity-regexp 'https://github\.com/takaosgb3/falco-plugin-claude_code/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  libclaude-code-plugin-linux-amd64.so
+
+# Alternative: use the bundled doctor CLI (single command):
+claude-code-doctor verify-signature libclaude-code-plugin-linux-amd64.so
+
+# 3. Inspect the SBOM:
+jq '.metadata, .components | length' sbom.cdx.json
+```
 
 ## Requirements (§27.2)
 
