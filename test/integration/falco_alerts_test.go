@@ -43,9 +43,164 @@
 package integration_test
 
 import (
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// expectedRuleFor maps the lowercase substring in positiveCases.ExpectedAlert
+// to the canonical Falco rule name (as declared in `rules/claude-code_rules.
+// yaml`). Used by the Allure JSON export so test-results.json's expected_rule
+// is a human-readable rule title.
+//
+// NOTE: Falco rule output templates render as `Critical [CLAUDE_CODE] <title>
+// (...)` (severity word, then bare `[CLAUDE_CODE]` tag, then title). The rule
+// _name_ in YAML carries the level inside the brackets. The Allure report
+// shows the rule name (matches openclaw conventions); we extract it from
+// stdout via extractRuleName below.
+var expectedRuleFor = map[string]string{
+	"dangerous bash command":                "[CLAUDE_CODE CRITICAL] Dangerous Bash Command",
+	"secret exfiltration attempt":           "[CLAUDE_CODE CRITICAL] Secret Exfiltration Attempt",
+	"permission bypass mode active":         "[CLAUDE_CODE CRITICAL] Permission Bypass Mode",
+	"hook disabled or modified":             "[CLAUDE_CODE CRITICAL] Hook Disabled Or Modified",
+	"config policy downgrade":               "[CLAUDE_CODE CRITICAL] Config Policy Downgrade",
+	"suspicious permission update":          "[CLAUDE_CODE WARNING] Suspicious Permission Update",
+	"claude settings modified":              "[CLAUDE_CODE WARNING] Claude Settings Modified",
+	"mcp config changed":                    "[CLAUDE_CODE WARNING] MCP Config Changed",
+	"suspicious mcp tool use":               "[CLAUDE_CODE WARNING] Suspicious MCP Tool Use",
+	"sensitive file read attempt":           "[CLAUDE_CODE WARNING] Sensitive File Read",
+	"workspace escape":                      "[CLAUDE_CODE WARNING] Workspace Escape",
+	"destructive git operation":             "[CLAUDE_CODE WARNING] Destructive Git Operation",
+	"prompt injection pattern":              "[CLAUDE_CODE WARNING] Prompt Injection Pattern",
+	"agent runaway tool storm":              "[CLAUDE_CODE WARNING] Agent Runaway Tool Storm",
+	"external fetch with sensitive context": "[CLAUDE_CODE WARNING] External Fetch With Sensitive Context",
+	"skill or command shell execution risk": "[CLAUDE_CODE WARNING] Skill Or Command Shell Execution Risk",
+	"agent/subagent risk (high)":            "[CLAUDE_CODE WARNING] Agent Subagent Risk (high)",
+	"channel or mcp push risk":              "[CLAUDE_CODE WARNING] Channel Or MCP Push Risk (high)",
+	"agent/subagent risk (low)":             "[CLAUDE_CODE NOTICE] Agent Subagent Risk (low)",
+}
+
+// titleToRuleName recovers the canonical bracketed rule name from the title
+// substring rendered by the Falco `output:` template. The output prints
+// `Critical [CLAUDE_CODE] dangerous bash command (...)`, so we have to
+// re-inject the level keyword (`CRITICAL`/`WARNING`/`NOTICE`) and titlecase
+// the title to reconstruct the rule name as declared in the YAML file.
+//
+// We key on the lowercase title only (case-insensitive, before the open paren)
+// — this is also the substring matched by alertCase.ExpectedAlert in
+// positiveCases, so the same map serves both purposes.
+var titleToRuleName = expectedRuleFor
+
+// preemptingRuleFor maps the lowercase substring in alertCase.ActualPreempt
+// to the canonical bracketed rule name. Mirrors the precedence comments in
+// positiveCases above.
+var preemptingRuleFor = map[string]string{
+	"workspace escape":              "[CLAUDE_CODE WARNING] Workspace Escape",
+	"claude settings modified":      "[CLAUDE_CODE WARNING] Claude Settings Modified",
+	"permission bypass mode active": "[CLAUDE_CODE CRITICAL] Permission Bypass Mode",
+}
+
+// alertTitleRegex pulls the post-tag title out of a Falco stdout alert line.
+// Falco emits alerts as:
+//
+//	HH:MM:SS.ns: <Severity> [CLAUDE_CODE] <title> (output_fields...)
+//
+// Capture group 1 = the title (e.g. "dangerous bash command"). Some titles
+// embed parens themselves, e.g. "agent/subagent risk (low)" — we handle this
+// via extractAlertTitle which trims the trailing "(field=...)" block manually
+// so embedded parens survive.
+var alertTitleRegex = regexp.MustCompile(`\[CLAUDE_CODE\]\s+(.*)$`)
+
+// extractAlertTitle returns the title that appears after `[CLAUDE_CODE]` and
+// before the final `(field1=... field2=...)` block, with embedded parens
+// preserved.
+func extractAlertTitle(line string) string {
+	m := alertTitleRegex.FindStringSubmatch(line)
+	if len(m) < 2 {
+		return ""
+	}
+	rest := strings.TrimSpace(m[1])
+	// The output_fields block always begins with `(<key>=`. Walk the string
+	// from the right until we find a `(<word>=` marker; that's the start of
+	// the fields region. Anything before it is the title.
+	fieldsRe := regexp.MustCompile(`\s\([a-z_][a-z0-9_]*=`)
+	loc := fieldsRe.FindStringIndex(rest)
+	if loc == nil {
+		return rest
+	}
+	return strings.TrimSpace(rest[:loc[0]])
+}
+
+// extractRuleName reconstructs the canonical rule name (as declared in
+// rules/*.yaml) from a Falco alert line. Returns "" if no [CLAUDE_CODE] tag
+// is present, or the raw "[CLAUDE_CODE] <title>" form when no mapping is
+// found (so we always return human-readable evidence).
+func extractRuleName(line string) string {
+	title := extractAlertTitle(line)
+	if title == "" {
+		return ""
+	}
+	if title == "heartbeat received" {
+		return "[CLAUDE_CODE NOTICE] Plugin Heartbeat"
+	}
+	if name, ok := titleToRuleName[strings.ToLower(title)]; ok {
+		return name
+	}
+	return "[CLAUDE_CODE] " + title
+}
+
+// fixtureCategoryAndID returns (pattern_id, category) for an alertCase. It
+// prefers the values stored in the fixture's _meta block (canonical source of
+// truth, also consumed by the Python pytest wrapper); when meta is nil it
+// falls back to a path heuristic so the function is safe to call with a
+// best-effort caller.
+//
+//	"PreToolUse/T-001-dangerous-bash-rm.json"  meta -> ("T-001-dangerous-bash-rm", "T-001")
+//	"SubagentStart/T-013-high-risk-85.json"    meta -> ("T-013-high-risk-85",      "T-013-high")
+//	"benign/PreToolUse-edit-readme.json"       meta -> ("benign-edit-readme",      "benign")
+//	"_heartbeat_/heartbeat-ok.json"            meta -> ("heartbeat-ok",            "heartbeat")
+func fixtureCategoryAndID(fixture string, meta map[string]any) (string, string) {
+	if meta != nil {
+		fid, _ := meta["fixture_id"].(string)
+		cat, _ := meta["category"].(string)
+		if fid != "" && cat != "" {
+			return fid, cat
+		}
+	}
+	base := strings.TrimSuffix(filepath.Base(fixture), ".json")
+	dir := filepath.Dir(fixture)
+	switch dir {
+	case "benign":
+		switch base {
+		case "PreToolUse-edit-readme":
+			return "benign-edit-readme", "benign"
+		case "PreToolUse-test-run":
+			return "benign-test-run", "benign"
+		case "PostToolUse-success":
+			return "benign-posttool-success", "benign"
+		}
+		return base, "benign"
+	case "_heartbeat_":
+		return base, "heartbeat"
+	}
+	cat := "unknown"
+	if strings.HasPrefix(base, "T-") {
+		parts := strings.SplitN(base, "-", 3)
+		if len(parts) >= 2 {
+			cat = parts[0] + "-" + parts[1]
+			if len(parts) >= 3 {
+				rest := parts[2]
+				if strings.HasPrefix(rest, "low-") {
+					cat = parts[0] + "-" + parts[1] + "-low"
+				} else if strings.HasPrefix(rest, "high-") {
+					cat = parts[0] + "-" + parts[1] + "-high"
+				}
+			}
+		}
+	}
+	return base, cat
+}
 
 // alertCase pairs a fixture under test/fixtures/hook_events/ with the
 // substring expected to appear in the matching Falco alert line, plus the
@@ -174,25 +329,60 @@ func TestL3_Falco_Categories(t *testing.T) {
 	falcoBin, pluginPath, root := requireFalcoEnv(t)
 
 	bodies := make([]string, 0, len(positiveCases))
+	metas := make([]map[string]any, 0, len(positiveCases))
 	for _, tc := range positiveCases {
-		body, _ := stripMeta(t, fixturePath(root, tc.Fixture))
+		body, meta := stripMeta(t, fixturePath(root, tc.Fixture))
 		bodies = append(bodies, body)
+		metas = append(metas, meta)
 	}
 	stdout, stderr := runFalcoOnFixtures(t, falcoBin, pluginPath, root, bodies)
 
 	at2Pass := 0
 	dedicatedFired := 0
 	preemptedAsExpected := 0
-	for _, tc := range positiveCases {
+	for i, tc := range positiveCases {
+		meta := metas[i]
 		// AT-2: any [CLAUDE_CODE alert mentioning the session_id is good.
 		alertsForSession := alertsForSession(stdout, tc.SessionID)
 		t.Run(tc.Note, func(t *testing.T) {
+			// Build the Allure result struct first; we'll mutate it as we
+			// figure out which rule actually fired, then push at end.
+			pid, cat := fixtureCategoryAndID(tc.Fixture, meta)
+			expectedRule := expectedRuleFor[tc.ExpectedAlert]
+			res := FalcoTestResult{
+				PatternID:    pid,
+				Category:     cat,
+				ExpectedRule: expectedRule,
+			}
+
 			if len(alertsForSession) == 0 {
+				res.Status = "failed"
+				res.Detected = false
+				res.RuleMatch = false
+				res.Evidence = "No [CLAUDE_CODE alert observed for session " + tc.SessionID
+				recordResult(res)
 				t.Errorf("AT-2 FAIL: no [CLAUDE_CODE alert for fixture %s (session=%s)\n%s",
 					tc.Fixture, tc.SessionID, errFmt(stdout, stderr))
 				return
 			}
 			at2Pass++
+
+			// Detected: at least 1 alert. Capture the first alert as
+			// canonical evidence and the rule name from it.
+			res.Detected = true
+			res.Evidence = alertsForSession[0]
+			matchedRules := make([]string, 0, len(alertsForSession))
+			for _, a := range alertsForSession {
+				if rn := extractRuleName(a); rn != "" {
+					matchedRules = append(matchedRules, rn)
+				}
+			}
+			if len(matchedRules) > 0 {
+				res.MatchedRule = matchedRules[0]
+				if len(matchedRules) > 1 {
+					res.MatchedRules = matchedRules
+				}
+			}
 
 			// Did the dedicated rule fire, or the preempting rule?
 			expectedFired := false
@@ -208,15 +398,33 @@ func TestL3_Falco_Categories(t *testing.T) {
 			switch {
 			case expectedFired:
 				dedicatedFired++
+				res.RuleMatch = true
+				res.Status = "passed"
 				t.Logf("OK: %s — dedicated rule %q fired", tc.Fixture, tc.ExpectedAlert)
 			case tc.ActualPreempt != "" && preemptFired:
 				preemptedAsExpected++
+				// Per PHASE_ALLURE_FALCO_LOG §5.2 #2: preempted-by-higher-
+				// priority rule is acceptable for AT-2. We still mark
+				// rule_match=false (the dedicated rule did not fire) but
+				// status=passed (test outcome is acceptable). Annotate the
+				// evidence so the Allure report explains the preemption.
+				res.RuleMatch = false
+				res.Status = "passed"
+				preemptName := preemptingRuleFor[tc.ActualPreempt]
+				if preemptName == "" {
+					preemptName = tc.ActualPreempt
+				}
+				res.Evidence = "[preempted by " + preemptName + "; AT-2 still satisfied — " +
+					"Falco first-match-wins precedence]\n" + res.Evidence
 				t.Logf("OK: %s — preempted by %q (expected per Falco first-match precedence)",
 					tc.Fixture, tc.ActualPreempt)
 			default:
+				res.RuleMatch = false
+				res.Status = "failed"
 				t.Errorf("UNEXPECTED: %s alerts=%v\n%s",
 					tc.Fixture, alertsForSession, errFmt(stdout, stderr))
 			}
+			recordResult(res)
 		})
 	}
 	t.Logf("[L3 TEST-006/AT-2] AT-2 %d/%d categories alerted; dedicated=%d preempted=%d",
@@ -229,9 +437,11 @@ func TestL3_Falco_BenignNoFalsePositive(t *testing.T) {
 	falcoBin, pluginPath, root := requireFalcoEnv(t)
 
 	bodies := make([]string, 0, len(benignFixtures))
+	metas := make([]map[string]any, 0, len(benignFixtures))
 	for _, p := range benignFixtures {
-		body, _ := stripMeta(t, fixturePath(root, p))
+		body, meta := stripMeta(t, fixturePath(root, p))
 		bodies = append(bodies, body)
+		metas = append(metas, meta)
 	}
 	stdout, stderr := runFalcoOnFixtures(t, falcoBin, pluginPath, root, bodies)
 
@@ -249,6 +459,30 @@ func TestL3_Falco_BenignNoFalsePositive(t *testing.T) {
 		t.Errorf("[L3 TEST-006 benign / AT-3] FAIL: %d false positives\n%s",
 			fpCount, errFmt(stdout, stderr))
 	}
+
+	// Allure scenario export: one record per benign fixture. Pass status =
+	// AT-3 satisfied (no [CLAUDE_CODE alert anywhere in the run); since
+	// Falco emits one stdout for the batch, all benign fixtures share the
+	// pass/fail result for this test.
+	for i, p := range benignFixtures {
+		pid, cat := fixtureCategoryAndID(p, metas[i])
+		res := FalcoTestResult{
+			PatternID:    pid,
+			Category:     cat,
+			Detected:     false,
+			ExpectedRule: "",
+			MatchedRule:  "",
+			RuleMatch:    fpCount == 0,
+			LatencyMs:    -1,
+			Evidence:     "",
+			Status:       "passed",
+		}
+		if fpCount > 0 {
+			res.Status = "failed"
+			res.Evidence = "AT-3 false positive(s) observed in benign run; see test stderr"
+		}
+		recordResult(res)
+	}
 }
 
 // TestL3_Falco_Heartbeat asserts ET-4: heartbeat fixture generates ≥1
@@ -256,15 +490,48 @@ func TestL3_Falco_BenignNoFalsePositive(t *testing.T) {
 func TestL3_Falco_Heartbeat(t *testing.T) {
 	falcoBin, pluginPath, root := requireFalcoEnv(t)
 
-	body, _ := stripMeta(t, fixturePath(root, "_heartbeat_/heartbeat-ok.json"))
+	fixture := "_heartbeat_/heartbeat-ok.json"
+	body, meta := stripMeta(t, fixturePath(root, fixture))
 	stdout, stderr := runFalcoOnFixtures(t, falcoBin, pluginPath, root,
 		[]string{body})
 
 	got := countAlerts(stdout, "heartbeat received")
+	pid, cat := fixtureCategoryAndID(fixture, meta)
+
+	// Capture the first matching line as evidence for the Allure report.
+	evidence := ""
+	for _, ln := range strings.Split(stdout, "\n") {
+		if strings.Contains(ln, "heartbeat received") {
+			evidence = ln
+			break
+		}
+	}
+
 	if got < 1 {
+		recordResult(FalcoTestResult{
+			PatternID:    pid,
+			Category:     cat,
+			Detected:     false,
+			ExpectedRule: "[CLAUDE_CODE NOTICE] Plugin Heartbeat",
+			RuleMatch:    false,
+			LatencyMs:    -1,
+			Evidence:     evidence,
+			Status:       "failed",
+		})
 		t.Fatalf("expected >=1 heartbeat received alert, got %d\n%s",
 			got, errFmt(stdout, stderr))
 	}
+	recordResult(FalcoTestResult{
+		PatternID:    pid,
+		Category:     cat,
+		Detected:     true,
+		ExpectedRule: "[CLAUDE_CODE NOTICE] Plugin Heartbeat",
+		MatchedRule:  extractRuleName(evidence),
+		RuleMatch:    true,
+		LatencyMs:    0,
+		Evidence:     evidence,
+		Status:       "passed",
+	})
 	t.Logf("[L3 ET-4] heartbeat OK: %d alert(s)", got)
 }
 

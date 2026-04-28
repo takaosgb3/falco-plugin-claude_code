@@ -1,0 +1,5 @@
+# Phase ALLURE-FALCO — Python wrapper deps for openclaw-style Allure report.
+# Pinned to the same versions used by the openclaw reference repo (verified
+# 2026-04-28 on macOS arm64 + Python 3.12).
+pytest>=7.4.0
+allure-pytest==2.15.0

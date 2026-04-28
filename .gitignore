@@ -41,4 +41,7 @@ coverage.txt
 # Allure
 allure-results/
 allure-report/
+allure-results-falco/
+allure-report-falco/
+test/integration/results/test-results.json
 .playwright-mcp/

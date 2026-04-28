@@ -79,3 +79,65 @@ jobs:
           name: allure-report
           path: allure-report/
           retention-days: 30
+
+      # ----------------------------------------------------------------------
+      # openclaw-style Falco scenario Allure report (`make allure-falco`).
+      # Generates Epic/Feature/Story tree + Markdown descriptions + Falco
+      # alert evidence with HTML highlighting. Independent from the
+      # gotestsum/JUnit `allure-report` artifact above — this one consumes
+      # test/integration/results/test-results.json produced by the
+      # `go test -tags=allure ./test/integration/...` step.
+      #
+      # Deliberately disabled in CI for v0.1.0 (continue-on-error: true) until
+      # we can install Falco on the runner and validate end-to-end. Locally
+      # `make allure-falco` produces the report against the host's ~/bin/
+      # falco. See PHASE_ALLURE_FALCO_LOG.md §5.2 #3.
+      # ----------------------------------------------------------------------
+      - name: Set up Python
+        if: always()
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install allure-pytest
+        if: always()
+        run: pip install -r test/allure/requirements.txt
+        continue-on-error: true
+
+      - name: Generate Falco scenario test-results.json
+        # Requires a Falco binary; CI runner has none in v0.1.0 so this
+        # step gracefully fails-soft. Local devs use `make allure-falco`.
+        if: always()
+        run: go test -tags=allure -count=1 ./test/integration/... -run "TestL3_Falco_(Categories|BenignNoFalsePositive|Heartbeat)" -timeout 120s
+        continue-on-error: true
+
+      - name: Run Falco scenario pytest wrapper
+        if: always()
+        run: |
+          if [ -f test/integration/results/test-results.json ]; then
+            cd test/allure && python3 -m pytest test_e2e_wrapper.py \
+              --test-results=../../test/integration/results/test-results.json \
+              --alluredir=../../allure-results-falco -v
+          else
+            echo "test-results.json not produced (Falco binary unavailable on CI runner). Skipping pytest wrapper."
+          fi
+        continue-on-error: true
+
+      - name: Generate Falco scenario Allure report
+        if: always()
+        run: |
+          if [ -d allure-results-falco ] && [ -n "$(ls -A allure-results-falco 2>/dev/null)" ]; then
+            allure generate allure-results-falco -o allure-report-falco --clean
+          else
+            echo "allure-results-falco empty. Skipping report generation."
+          fi
+        continue-on-error: true
+
+      - name: Upload Falco scenario Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-falco
+          path: allure-report-falco/
+          retention-days: 30
+          if-no-files-found: ignore

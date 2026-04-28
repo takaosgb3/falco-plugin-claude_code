@@ -33,7 +33,7 @@ else
   endif
 endif
 
-.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom allure-deps allure-results allure-report allure allure-serve allure-clean
+.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom allure-deps allure-results allure-report allure allure-serve allure-clean allure-falco-deps allure-falco-results allure-falco-pytest allure-falco-report allure-falco allure-falco-serve allure-falco-clean
 
 # P002: -buildmode=c-shared is REQUIRED (without it, Falco cannot load the plugin)
 build:
@@ -218,3 +218,71 @@ allure-serve: allure-report
 
 allure-clean:
 	rm -rf $(ALLURE_RESULTS) $(ALLURE_REPORT)
+
+# ==============================================================================
+# Allure-Falco: openclaw 風シナリオ駆動レポート (Epic / Feature / Story 階層 +
+# Falco alert evidence + 4 Steps + Markdown description + Severity 別マッピング)
+#
+# 既存の `make allure` (gotestsum + JUnit) は併存維持。`make allure` が Go 開発者用
+# のテスト視覚化レポートなのに対し、`make allure-falco` はセキュリティ E2E
+# 専用のシナリオレポートで、Falco を実起動して各 fixture が期待ルールを発火
+# させるかを実測する。
+#
+# Pipeline:
+#   1. allure-falco-results
+#      go test -tags=allure ./test/integration/...
+#      → test/integration/results/test-results.json (openclaw 互換 schema)
+#   2. allure-falco-pytest
+#      pytest + allure-pytest が test-results.json を読み、25 ケース分の
+#      Allure メタデータ (Epic/Feature/Story/Severity/Markdown desc/4 Steps)
+#      を $(ALLURE_FALCO_RESULTS)/ に書き出す
+#   3. allure-falco-report
+#      allure CLI が HTML レポート $(ALLURE_FALCO_REPORT)/ を生成
+#   4. allure-falco-serve
+#      allure open でローカル HTTP サーバー起動 + ブラウザを開く
+#
+# Prereqs:
+#   - ~/bin/falco (or `falco` on PATH)
+#   - $(BINARY) — 事前に make build を済ませておくこと
+#   - python3, pip (allure-pytest を user site にインストール)
+#   - allure CLI  (brew install allure / Linux: 公式 release tarball)
+# ==============================================================================
+
+ALLURE_FALCO_RESULTS := allure-results-falco
+ALLURE_FALCO_REPORT  := allure-report-falco
+ALLURE_FALCO_JSON    := test/integration/results/test-results.json
+
+allure-falco-deps:
+	@which python3 >/dev/null 2>&1 || { echo "python3 not installed"; exit 1; }
+	@which allure  >/dev/null 2>&1 || { echo "allure CLI not installed (brew install allure)"; exit 1; }
+	@python3 -m pip install --user --quiet -r test/allure/requirements.txt
+
+allure-falco-results: allure-falco-deps
+	@mkdir -p test/integration/results
+	@rm -f $(ALLURE_FALCO_JSON)
+	go test -tags=allure -count=1 ./test/integration/... \
+	    -run "TestL3_Falco_(Categories|BenignNoFalsePositive|Heartbeat)" -timeout 120s
+	@test -f $(ALLURE_FALCO_JSON) && echo "JSON: $(ALLURE_FALCO_JSON)" \
+	    || (echo "ERROR: $(ALLURE_FALCO_JSON) not produced (Falco / plugin missing?)"; exit 1)
+
+allure-falco-pytest: allure-falco-results
+	@rm -rf $(ALLURE_FALCO_RESULTS)
+	cd test/allure && python3 -m pytest test_e2e_wrapper.py \
+	    --test-results=../../$(ALLURE_FALCO_JSON) \
+	    --alluredir=../../$(ALLURE_FALCO_RESULTS) -v
+
+allure-falco-report: allure-falco-pytest
+	allure generate $(ALLURE_FALCO_RESULTS) -o $(ALLURE_FALCO_REPORT) --clean
+	@echo ""
+	@echo "openclaw-style Allure report generated. View it via HTTP (CORS-safe):"
+	@echo "  make allure-falco-serve"
+	@echo ""
+
+allure-falco: allure-falco-report
+
+allure-falco-serve: allure-falco-report
+	@echo "Starting Allure HTTP server (Ctrl-C to stop)..."
+	allure open $(ALLURE_FALCO_REPORT)
+
+allure-falco-clean:
+	rm -rf $(ALLURE_FALCO_RESULTS) $(ALLURE_FALCO_REPORT) $(ALLURE_FALCO_JSON)

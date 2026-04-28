@@ -248,9 +248,22 @@ Examples:
 
 ## Test reports
 
-### Allure report (E2E test result visualization)
+Two Allure reports are produced from the same source tree, each targeting a
+different audience:
 
-Generate the Allure HTML report locally:
+| Target | Command | Audience | Source |
+|---|---|---|---|
+| Go test results | `make allure` / `make allure-serve` | Go developers | gotestsum + JUnit XML across all packages |
+| Falco scenario report | `make allure-falco` / `make allure-falco-serve` | Security engineers | `test/integration/results/test-results.json` (Level 3 Falco-in-the-loop) |
+
+The two reports do **not** overlap: the Go report enumerates every `_test.go`
+case (unit + Level 1 + Level 2 + Level 3); the Falco scenario report has
+**one case per fixture** under `test/fixtures/hook_events/`, decorated with
+Epic / Feature / Story / Severity, a Markdown attack-pattern table, the
+actual Falco alert with highlighted security keywords, and rule-mapping
+verification — all derived from a real Falco run.
+
+### `make allure` (gotestsum + JUnit) — Go developer view
 
 ```bash
 brew install gotestsum allure   # first time only (macOS)
@@ -267,10 +280,44 @@ upload them as a CI artifact), use `make allure` and serve the resulting
 On Linux, install `gotestsum` via `go install gotest.tools/gotestsum@latest`
 and `allure` from the [official release](https://github.com/allure-framework/allure2/releases).
 
-CI uploads an `allure-report` artifact on every PR
-(see [`.github/workflows/e2e-test.yml`](.github/workflows/e2e-test.yml)).
-Existing `_test.go` files are unchanged — the report is built from JUnit XML
-emitted by `gotestsum`, then converted by the Allure CLI.
+### `make allure-falco` (openclaw-style scenario report) — security engineer view
+
+```bash
+brew install allure              # first time only (macOS)
+python3 -m pip install --user -r test/allure/requirements.txt
+make build                        # produce the plugin .dylib for Falco-in-the-loop
+make allure-falco-serve           # generate + serve the scenario report
+```
+
+`make allure-falco` walks four stages:
+
+1. `allure-falco-results` runs the `-tags=allure` integration tests against a
+   local Falco binary (`~/bin/falco` or `falco` on PATH) and writes
+   `test/integration/results/test-results.json` (openclaw-compatible 9-key
+   schema).
+2. `allure-falco-pytest` runs `test/allure/test_e2e_wrapper.py` (pytest +
+   `allure-pytest`) which generates one Allure case per fixture, decorated
+   with Markdown description (pattern info, payload, rule mapping, alert
+   evidence) and four steps (Test Execution / Detection Evidence / Rule
+   Mapping / Verification).
+3. `allure-falco-report` invokes the Allure CLI to produce
+   `allure-report-falco/`.
+4. `allure-falco-serve` opens the report via `allure open` (local HTTP
+   server, CORS-safe).
+
+The Behaviors tree is `Epic: Claude Code E2E Security Tests` →
+`Feature: T-001..T-018 + benign + heartbeat` → `Story: <fixture_id>`.
+Severity is mapped per requirements §12.1 priority levels (T-001/T-002/
+T-003/T-006/T-016 = critical, most others = normal, T-013-low / heartbeat
+= minor, benign = trivial). Both `make allure-falco-clean` (this report
+only) and `make allure-clean` (gotestsum report only) are available;
+neither touches the other.
+
+CI uploads both `allure-report` and `allure-report-falco` artifacts on every
+PR (see [`.github/workflows/e2e-test.yml`](.github/workflows/e2e-test.yml)).
+Existing `_test.go` files are unchanged — the gotestsum report is built from
+JUnit XML, while the Falco scenario report is gated by the `-tags=allure`
+build tag so unit `go test ./...` runs are unaffected.
 
 ## Documentation
 

@@ -289,10 +289,23 @@ allure-falco-clean:
 
 ### 5.1 現在の進捗
 ```
-最終更新: 2026-04-28 計画策定完了
-完了: ALLURE_INVESTIGATION_LOG §3 (root cause + approach 評価)
-進行中: B-1（agent 起動準備）
+最終更新: 2026-04-28 実装完了
+完了: B-1〜B-17 全タスク完了 (allure-falco エンドツーエンド動作確認済)
+       - B-1〜B-5: Go integration test JSON export (build-tag gated)
+       - B-6〜B-9: Python wrapper + conftest + requirements
+       - B-10〜B-13: Makefile / .gitignore / CI / README 更新
+       - B-14〜B-17: ローカル smoke + 構造検証 + screenshot 11 枚
+進行中: B-18〜B-20 (commit + Issue 報告)
 ブロッカー: なし
+最終結果:
+  - test-results.json: 25 records / 9 keys, openclaw schema 完全互換
+  - allure-results-falco/: 146 raw files (25 -result.json + container/attachments)
+  - allure-report-falco/: HTML report, 1 epic / 20 features / 25 stories
+  - Severity 分布: critical=6, normal=13, minor=2, trivial=4 (§3.2 完全一致)
+  - 4 attachment steps on 21 detected cases, 3 on 4 benign cases
+  - V-1〜V-12 verification matrix: 12/12 PASS
+  - Playwright MCP は本セッション未提供のため Chrome headless 経由で 11 枚 screenshot 取得
+    + behaviors.json/test-cases/*.json の構造検証で代替
 ```
 
 ### 5.2 既知の落とし穴
@@ -326,4 +339,70 @@ allure-falco-clean:
 
 ## 6. 進捗ログ
 
-(作業実行中に追記)
+### 2026-04-28 — 実装セッション
+
+- 14:38 開始。`docs/tasks/PHASE_ALLURE_FALCO_LOG.md` を canonical spec として確認。openclaw 参考実装 (`test_e2e_wrapper.py`, `conftest.py`, `requirements.txt`) を読み込み、互換 schema (9 keys / 25 records) を確認。
+
+#### B-1〜B-5: Go integration test JSON export
+- `test/integration/allure_result_test.go` に `FalcoTestResult` struct (9 keys) を新規追加。openclaw `e2e/results/test-results.json` と完全互換。
+- `test/integration/allure_export_off_test.go` (build tag `!allure`) に no-op `recordResult` / `flushResults` を実装。これで `go test ./...` 実行時の副作用ゼロを保証。
+- `test/integration/allure_export_on_test.go` (build tag `allure`) に sync.Mutex で守った in-memory slice + `TestMain` で `test/integration/results/test-results.json` への書き出しを実装。
+- `falco_alerts_test.go` を拡張: `expectedRuleFor` map (lowercase substring → 正準ルール名) と `extractAlertTitle` / `extractRuleName` 関数で stdout から rule 名を再構築。Falco の actual output が `Critical [CLAUDE_CODE] dangerous bash command (...)` 形式なため、`titleToRuleName` 経由で `[CLAUDE_CODE CRITICAL] Dangerous Bash Command` に逆引き。
+- T-013-low の `(low)` 接尾辞対応: 単純な `\)` 終端では捕捉不能なため、`fieldsRe = \s\([a-z_][a-z0-9_]*=` で output_fields 開始位置を探し、それより前を title として抽出する 2 段階ロジックを採用。
+- preempt 案件 (T-013-high / T-017 / T-018) は `RuleMatch=false / Status=passed` + evidence 先頭に `[preempted by …; AT-2 still satisfied — Falco first-match-wins precedence]` の注記を付与。§5.2 #2 に準拠。
+- `go vet ./...` / `go vet -tags=allure ./test/integration/...` 共に OK。
+- 実行例: `go test -tags=allure -count=1 ./test/integration/... -run "TestL3_Falco_(Categories|BenignNoFalsePositive|Heartbeat)" -timeout 120s` → 7.3 s で 25 records 出力。
+
+#### B-6〜B-9: Python wrapper 移植
+- `test/allure/test_e2e_wrapper.py`: openclaw 版から以下を変更。
+  - `PATTERNS_DIR = test/fixtures/hook_events`、`rglob("*.json")` で再帰探索。
+  - `load_all_patterns()` を fixture `_meta` block + 上位 hook payload フィールドの dict にする形に変更。pattern_id は `_meta.fixture_id`、category は `_meta.category`。
+  - `SEVERITY_MAP` を §3.2 マッピングに置換 (T-013-low/high の split を含む 21 categories 対応)。
+  - `SECURITY_KEYWORDS` を §3.3 リストに置換 (claude_code 固有: `bypassPermissions`, `disableAllHooks`, `PreToolUse`, etc.)。
+  - `_build_description` Markdown を 5 セクション (Attack Pattern Information / Attack Details / Test Execution Results / Rule Mapping / Detection Evidence) に再構成。`_payload_summary()` で fixture の hook_event_name + tool_name + command + ... を 1 行 summary に変換。
+  - `_feature_for(category)` で T-013-low / T-013-high を `T-013 Agent / Subagent Risk` に統合。
+  - 4 steps (Test Execution Result / Detection Evidence (Highlighted) / Rule Mapping / Verification) は openclaw と同じ。
+- `test/allure/conftest.py`: `--test-results` (required) + `--logs-dir` (optional) CLI option、`_prewarm_caches()` で fixture ロード初回コストを除外。openclaw 版を最小修正で移植。
+- `test/allure/requirements.txt`: `pytest>=7.4.0`, `allure-pytest==2.15.0`。
+- `python3 -m pip install --user -r test/allure/requirements.txt` で依存導入。
+- `pytest test_e2e_wrapper.py --test-results=… --alluredir=…` 実行: 25 cases all PASS (0.03 s)。
+
+#### B-10〜B-13: Makefile / .gitignore / CI / README
+- `Makefile` に新規 6 ターゲット追加 (`allure-falco-deps`, `allure-falco-results`, `allure-falco-pytest`, `allure-falco-report`, `allure-falco`, `allure-falco-serve`, `allure-falco-clean`)。既存 `allure*` ターゲットは無修正で併存。
+- `.gitignore` に `allure-results-falco/`, `allure-report-falco/`, `test/integration/results/test-results.json` 追加。
+- `.github/workflows/e2e-test.yml` に Python setup + allure-pytest install + falco scenario test-results.json 生成 + pytest wrapper + report 生成 + artifact upload step を `continue-on-error: true` で追加。Linux runner で Falco 不在の問題 (§5.2 #3) は graceful skip + `if-no-files-found: ignore` で対応。
+- `README.md` の「Test reports」セクションを 2 レポート併存に書き換え (Go 開発者用 = `make allure`, セキュリティ E2E 用 = `make allure-falco`)。
+
+#### B-14〜B-17: 検証
+- `make allure-falco-clean && make allure-falco`: clean 状態から end-to-end 成功 (test-results.json → allure-results-falco → allure-report-falco)。
+- 構造検証 V-1〜V-12 全 PASS:
+  - V-1 25 cases / 100% passed (Overview)
+  - V-2 1 epic + 20 features
+  - V-3/4 T-001..T-018 + benign + heartbeat
+  - V-5 Severity 6/13/2/4 (§3.2 完全一致)
+  - V-6 25/25 cases に 5 セクション Markdown description
+  - V-7 21x4 + 4x3 step distribution
+  - V-8 21/21 detected cases に `<mark>` highlight HTML attachment
+  - V-9 T-001 dangerous-bash-rm: rule_match OK
+  - V-10 T-013-high preempted: status=passed + evidence に preempt 注記
+  - V-11 heartbeat: severity=minor / passed
+  - V-12 4 benign: trivial / passed
+- 11 screenshots 取得 → `docs/screenshots/allure-falco/`:
+  - `overview.png`, `behaviors-tree.png`, `suites.png`, `graphs.png`, `categories.png`
+  - `test-detail-T-001.png`, `test-detail-T-002-secret.png`, `test-detail-T-013-high-preempted.png`, `test-detail-benign.png`, `test-detail-heartbeat.png`, `test-detail-evidence-html.png`
+- Playwright MCP は本セッション未提供のため Chrome headless (`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless`) + Python http.server で代替。HTML 視覚 verify とは別に behaviors.json / test-cases/*.json の構造検証で 12 項目すべて検証。
+
+#### B-18 品質ゲート
+- `go vet ./...` / `go vet -tags=allure ./test/integration/...` PASS
+- `go build ./...` PASS
+- `make build` (darwin-arm64) → `Mach-O` shared library OK
+- `make verify` PASS, `make validate-rules` 0 issues (23 rules)
+- `make e2e` (Level 1+2) PASS
+- `make e2e-l3` (Level 3, allure tag なし) PASS — allure tag なしでは test-results.json は生成されない (副作用ゼロ確認済)
+- `make allure` (gotestsum + JUnit) 後方互換 PASS
+- `make allure-falco` (新規) clean 状態から成功
+- P002 / P003 / P008 / P014 すべて維持。
+
+#### B-19/B-20: 次工程
+- git commit with Co-Authored-By 付与
+- Issue #2 へ最終報告
