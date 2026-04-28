@@ -53,3 +53,29 @@ jobs:
           name: e2e-results
           path: e2e-results/
           retention-days: 30
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Install Allure CLI
+        run: |
+          curl -L -o /tmp/allure.tgz https://github.com/allure-framework/allure2/releases/latest/download/allure-2.27.0.tgz
+          tar -xzf /tmp/allure.tgz -C /tmp/
+          sudo ln -sf /tmp/allure-2.27.0/bin/allure /usr/local/bin/allure
+          allure --version
+
+      - name: Generate Allure results
+        run: $(go env GOPATH)/bin/gotestsum --junitfile allure-results/junit.xml --format pkgname -- -count=1 ./...
+        continue-on-error: true
+
+      - name: Generate Allure report
+        if: always()
+        run: allure generate allure-results -o allure-report --clean
+
+      - name: Upload Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report/
+          retention-days: 30

@@ -33,7 +33,7 @@ else
   endif
 endif
 
-.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom
+.PHONY: build build-release build-logger build-doctor build-all test lint clean verify package vet e2e-pattern e2e-pipeline e2e e2e-l3 e2e-all validate-rules sbom allure-deps allure-results allure-report allure allure-clean
 
 # P002: -buildmode=c-shared is REQUIRED (without it, Falco cannot load the plugin)
 build:
@@ -173,3 +173,42 @@ e2e-l3:
 
 # All E2E layers: L1 + L2 + L3 (longest, ~30s on macOS arm64).
 e2e-all: e2e e2e-l3
+
+# ==============================================================================
+# Allure report (JUnit XML 経由)
+#
+# 既存の _test.go を変更せず、gotestsum で JUnit XML を出力 → allure CLI で
+# HTML レポート化する最小経路。openclaw が pytest+allure-pytest を採用するのに対し、
+# 本リポは Go-only を維持するため gotestsum + JUnit を選択。
+#
+# install (macOS):
+#   brew install gotestsum allure
+# install (Linux):
+#   go install gotest.tools/gotestsum@latest
+#   curl -L -o /tmp/allure.tgz https://github.com/allure-framework/allure2/releases/latest/download/allure-2.27.0.tgz
+#   tar -xzf /tmp/allure.tgz -C /tmp && sudo ln -sf /tmp/allure-2.27.0/bin/allure /usr/local/bin/allure
+# ==============================================================================
+
+ALLURE_RESULTS := allure-results
+ALLURE_REPORT  := allure-report
+
+allure-deps:
+	@which gotestsum >/dev/null 2>&1 || { echo "gotestsum not installed. Install: brew install gotestsum (macOS) or 'go install gotest.tools/gotestsum@latest'"; exit 1; }
+	@which allure >/dev/null 2>&1 || { echo "allure not installed. Install: brew install allure (macOS)"; exit 1; }
+
+allure-results: allure-deps
+	@mkdir -p $(ALLURE_RESULTS)
+	@rm -f $(ALLURE_RESULTS)/*.xml
+	gotestsum --junitfile $(ALLURE_RESULTS)/junit.xml --format pkgname -- -count=1 ./...
+
+allure-report: allure-results
+	allure generate $(ALLURE_RESULTS) -o $(ALLURE_REPORT) --clean
+	@echo ""
+	@echo "Allure report generated. Open with:"
+	@echo "  open $(ALLURE_REPORT)/index.html  (macOS)"
+	@echo "  xdg-open $(ALLURE_REPORT)/index.html  (Linux)"
+
+allure: allure-report
+
+allure-clean:
+	rm -rf $(ALLURE_RESULTS) $(ALLURE_REPORT)

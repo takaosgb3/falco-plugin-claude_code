@@ -37,3 +37,7 @@ coverage.txt
 
 # Serena MCP local state
 .serena/
+
+# Allure
+allure-results/
+allure-report/

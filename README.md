@@ -246,6 +246,26 @@ Examples:
 | `claude_code.risk_score` | uint64 | 0..100 |
 | `claude_code.severity` | string | `critical` / `warning` / `notice` / `info` |
 
+## Test reports
+
+### Allure report (E2E test result visualization)
+
+Generate the Allure HTML report locally:
+
+```bash
+brew install gotestsum allure   # first time only (macOS)
+make allure                      # produces allure-report/index.html
+open allure-report/index.html
+```
+
+On Linux, install `gotestsum` via `go install gotest.tools/gotestsum@latest`
+and `allure` from the [official release](https://github.com/allure-framework/allure2/releases).
+
+CI uploads an `allure-report` artifact on every PR
+(see [`.github/workflows/e2e-test.yml`](.github/workflows/e2e-test.yml)).
+Existing `_test.go` files are unchanged — the report is built from JUnit XML
+emitted by `gotestsum`, then converted by the Allure CLI.
+
 ## Documentation
 
 - **Requirements (canonical)**: [`docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md`](docs/claude_code_falco_plugin_requirements_2026-04-26_v3.md)
