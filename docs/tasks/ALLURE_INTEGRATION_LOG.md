@@ -96,6 +96,66 @@ commit: 0a6cbaf feat(test): integrate Allure report for E2E tests
 - Allure 公式: https://allurereport.org/
 - gotestsum: https://github.com/gotestyourself/gotestsum
 
+## 5. 検証チェックリスト（追加、Playwright での目視確認）
+
+このセクションは「test 結果がレポートに正しく反映されているか」を検証する。
+Playwright MCP で Allure HTTP server (http://127.0.0.1:8765) に navigate しながら確認。
+
+- [ ] **V-1**: Overview ページ — total/passed/failed の集計が一致
+- [ ] **V-2**: Suites ページ — 7 packages 全部展開して内訳確認
+  - pkg/parser: 111
+  - test/e2e: 110
+  - test/integration: 29
+  - cmd/claude-code-doctor: 19
+  - cmd/plugin-sdk: 19
+  - cmd/claude-code-security-logger: 14
+  - tools/rule-validator: 10
+- [ ] **V-3**: Suites 内の代表テストを drill down して個別テスト名・duration・status を確認
+- [ ] **V-4**: Graphs — Status / Severity / Duration distribution が描画されているか
+- [ ] **V-5**: Timeline — 7 packages の並列実行が timeline 上で見えるか
+- [ ] **V-6**: Behaviors — feature/story グルーピング（gotestsum 経由なので限定的なはず）
+- [ ] **V-7**: Packages — Go package ごとの集計が表示されているか
+- [ ] **V-8**: Categories — 失敗カテゴリは 0 件のはず（全 PASS）
+
+### 5.1 検証結果（2026-04-28 Playwright MCP 経由）
+
+検証環境: HTTP server `allure open allure-report --port 8765`、ブラウザ navigate via Playwright MCP、各セクションで snapshot + screenshot を取得。
+スクリーンショット: `docs/screenshots/allure/*.png`
+
+| V-N | 検証内容 | 結果 | 証拠 |
+|---|---|---|---|
+| **V-1** | Overview ページ集計 | **PASS**: 312 test cases / 100% / start 14:40:55 / duration 10s 820ms / 7 suites | `allure-overview.png` |
+| **V-2** | Suites 7 packages 内訳 | **PASS**: parser 111 / e2e 110 / integration 29 / doctor 19 / plugin-sdk 19 / security-logger 14 / rule-validator 10（合計 312） / Status 0+0+312+0+0 | `allure-overview.png`, `allure-suite-integration.png` |
+| **V-3** | test/integration drill-down | **PASS**: 29 tests 全件展開（TestAT_1_Build / TestAT_5_Redaction / TestAT_Summary / TestL3_Falco_BenignNoFalsePositive 2s 310ms / TestL3_Falco_Categories + 20 sub-tests / TestL3_Falco_Heartbeat 2s 310ms / TestL3_FalcoLocalYAML_* / TestL3_Latency_P95 10s 820ms） | `allure-suite-integration.png` |
+| **V-3 詳細パネル** | TestL3_Latency_P95 click → 個別 detail | **PASS**: Status=Passed / Severity=normal / Duration=10s 820ms / Overview/History/Retries タブ表示 | `allure-test-detail-latency.png` |
+| **V-4** | Graphs（Status / Severity / Duration distribution） | **PASS**: STATUS 100% green ring / SEVERITY normal=312 / DURATION ヒストグラム（多数 0-1s, 数件 2-3s, 1 件 10-11s = TestL3_Latency_P95 と一致） / Trend 系は履歴なしで「nothing to show」（初回実行のため正常） | `allure-graphs.png` |
+| **V-5** | Timeline | **PASS**: "Selected 312 tests (100.00%) with duration above 0s" 集計表示。host/thread レーン詳細は gotestsum が emit しないため表示されない（既知の制約） | `allure-timeline.png` |
+| **V-6** | Behaviors | **PASS**: 312 tests を behavior として alphabetical 一覧表示（TestAllDomainFields_* / TestAT_* / TestC4_RPVMustBeFirst / TestDetectCommandInjection + sub-tests / TestDetector_GitDestructive + sub-tests 等）。Status 0+0+312+0+0 | `allure-behaviors.png` |
+| **V-7** | Packages | **PASS**: 階層 tree 表示 `github` (312) / 展開可能。Status 0+0+312+0+0 | `allure-packages.png` |
+| **V-8** | Categories | **PASS（期待通り空）**: "There are no items"。failure 0 件のため failure category も 0 件で正常 | `allure-categories.png` |
+
+### 5.2 制約・既知の限界
+
+gotestsum + JUnit XML 経路の限界として、以下の Allure 機能は最小限の表示にとどまる:
+
+1. **Severity**: 全テストが `normal`（gotestsum が個別 severity を emit しない）
+2. **Feature/Story グルーピング**: Behaviors ページでは alphabetical 一覧のみ。`@feature`/`@story` annotation がないため
+3. **Test body / Steps 詳細**: 個別 detail パネルの Execution / Test body は空（PASS テストの場合）
+4. **Timeline host/thread レーン**: gotestsum が host/thread metadata を emit しないため詳細レーン非表示
+5. **Trend 系**: 初回実行のため履歴データなし。複数回実行 + history 保存設定で表示開始
+
+これらは将来 `allure-go` ライブラリ統合で解消可能（ただし全 _test.go の書き換えが必要、v0.1 では非対応）。
+
+### 5.3 結論
+
+**「テスト結果は正しくレポートされている」**。
+- 全 312 件の test name / duration / status (PASS) が正確に表示
+- Suites / Behaviors / Packages 全 hierarchical view で確認可能
+- Graphs で集計可視化、Timeline で実行時間集計
+- Failure 0 件のため Categories は空（仕様通り）
+
+ご指摘いただいた `file://` 直接 open で widgets が空になる問題は **commit `26dbe87`** で解消（`make allure-serve` を推奨経路に変更）。
+
 ## 4. 進捗ログ
 
 ### 2026-04-28 A-1〜A-4 調査・確認
