@@ -45,18 +45,14 @@ func debugLog(format string, args ...interface{}) {
 }
 
 // --- Configuration ---
+// All fields are optional; Init() applies runtime defaults when zero.
+// `omitempty` ensures jsonschema.Reflect() does not mark them as required,
+// so users can pass minimal init_config (e.g. {"log_paths": [...]}).
 type ClaudeCodeConfig struct {
-	LogPaths        []string `json:"log_paths"`
-	EventBufferSize int      `json:"event_buffer_size"`
-	// PollIntervalMs sets the polling-fallback interval in milliseconds. The
-	// plugin uses fsnotify as the primary mechanism; the poller catches up
-	// missed events on platforms where fsnotify is flaky (macOS Spotlight,
-	// remote filesystems, …). 0 disables polling. Default: 250ms.
-	PollIntervalMs int `json:"poll_interval_ms"`
-	// StartAt controls the initial seek behaviour. "end" (default) seeks to
-	// the file tail (P014). "beginning" seeks to byte 0 — used by replay /
-	// fixture tests (§14.1 P-007 / ES-004).
-	StartAt string `json:"start_at"`
+	LogPaths        []string `json:"log_paths,omitempty"`
+	EventBufferSize int      `json:"event_buffer_size,omitempty"`
+	PollIntervalMs  int      `json:"poll_interval_ms,omitempty"`
+	StartAt         string   `json:"start_at,omitempty"`
 }
 
 // --- Plugin Event ---
