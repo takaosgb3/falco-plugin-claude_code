@@ -46,11 +46,22 @@
 ### 2.1 現在の進捗
 
 ```
-最終更新: 2026-04-28 A-1〜A-4 完了
-完了: A-1, A-2, A-3, A-4
-進行中: A-5, A-6（Makefile 拡張）
-ブロッカー: gotestsum 未インストール（Makefile install ヒントに記載のみ、人間操作で install 必要）。allure CLI は /opt/homebrew/bin/allure に install 済（v2.37.0）
+最終更新: 2026-04-28 全タスク完了（commit 0a6cbaf）
+完了: A-1 〜 A-13（A-13 Issue #2 報告は人間が実施）
+進行中: なし
+ブロッカー: なし（gotestsum local install は人間操作 — Makefile install ヒント済）
+commit: 0a6cbaf feat(test): integrate Allure report for E2E tests
 ```
+
+最終成果物:
+
+| ファイル | 変更 |
+|---|---|
+| `Makefile` | `+40 -1` allure-deps/allure-results/allure-report/allure/allure-clean target を追加 |
+| `.gitignore` | `+4` allure-results/ allure-report/ を ignore |
+| `.github/workflows/e2e-test.yml` | `+26` gotestsum/Allure CLI install + report 生成 + artifact upload |
+| `README.md` | `+20` 「Test reports」セクション新設 |
+| `docs/tasks/ALLURE_INTEGRATION_LOG.md` | `+176` 本ログ |
 
 ### 2.2 重要パラメータ
 
