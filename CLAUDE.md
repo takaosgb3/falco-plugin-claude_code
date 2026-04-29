@@ -1,5 +1,8 @@
 # CLAUDE.md — falco-plugin-claude-code
 
+> **セッション復旧時はまず `docs/tasks/SESSION_RESUME.md` を読むこと**。
+> Phase 0-6 + Allure 統合まで完了済み（v0.1.0 release-ready、`git tag v0.1.0` 待ち）。
+
 ## プロジェクト概要
 
 Claude Code 用 脅威検知 Falco プラグイン (`falco-plugin-claude-code`) の開発リポジトリ。
